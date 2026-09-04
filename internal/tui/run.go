@@ -29,6 +29,10 @@ func Run(sess plan.Session) error {
 	m := New(sess, DefaultRunner(client, live), func(ctx context.Context, l *catalog.Live) error { return l.Sample(ctx, client) }, hist)
 	m.fetcher = client.List
 	m.dataFetcher = func(ctx context.Context, row cubclient.Row) (string, error) { return exec.UnitData(ctx, client, row) }
+	m.dataLoader = func(ctx context.Context, row cubclient.Row) (string, string, error) { return exec.UnitDataWithHash(ctx, client, row) }
+	m.dataSaver = func(ctx context.Context, row cubclient.Row, text, ifMatch string) (int, error) {
+		return exec.SaveUnitData(ctx, client, row, text, ifMatch, editDescription)
+	}
 	_ = live
 	_, err = tea.NewProgram(m).Run()
 	return err

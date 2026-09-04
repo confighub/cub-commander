@@ -86,6 +86,11 @@ type Model struct {
 	drawerCursor int
 	drawerItems  []history.Entry
 
+	// detail
+	det        *detailState
+	dataLoader DataLoader
+	dataSaver  DataSaver
+
 	// diff
 	diff        *diffState
 	dataFetcher DataFetcher
@@ -194,6 +199,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case detailMsg:
 		m.openDetailRow(msg.row)
 		return m, nil
+	case unitDataMsg:
+		if m.det != nil && unitID(m.det.row) == msg.unitID {
+			m.det.loading = false
+			if msg.err != nil {
+				m.setStatus("unit data: "+msg.err.Error(), true)
+			} else {
+				m.det.data, m.det.hash, m.det.loaded = msg.text, msg.hash, true
+			}
+			m.renderDetail()
+		}
+		return m, nil
+	case editedMsg:
+		return m, m.afterEdit(msg)
+	case savedMsg:
+		return m, m.afterSave(msg)
 	case diffMsg:
 		m.running = false
 		m.stmt, m.plan = msg.stmt, msg.plan
@@ -341,9 +361,15 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.focus = focusCmd
 		case m.chooserOpen && (m.result != nil || m.browse != nil):
 			m.chooserOpen = false
-		case m.mode == modeDetail && m.browse != nil && m.plan != nil && len(m.plan.Browse) > 0:
-			m.mode = modeBrowse
-		case m.mode == modeDetail || (m.mode == modeText && m.result != nil):
+		case m.mode == modeDetail:
+			if m.det != nil && (m.det.from == modeBrowse || m.det.from == modeDiff || m.det.from == modeResults) {
+				m.mode = m.det.from
+			} else if m.result != nil {
+				m.mode = modeResults
+			} else {
+				m.openChooser()
+			}
+		case m.mode == modeText && m.result != nil:
 			m.mode = modeResults
 		case m.mode == modeDiff:
 			if m.browse != nil {
@@ -384,6 +410,9 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeDiff {
 			return m.diffKey(k)
+		}
+		if m.mode == modeDetail {
+			return m.detailKey(k)
 		}
 		return m.mainKey(k)
 	}
@@ -633,10 +662,7 @@ func (m *Model) openDetail() {
 	if i < 0 || i >= len(m.result.Raw) {
 		return
 	}
-	m.detail.SetContent(renderRow(m.result.Raw[i]))
-	m.detail.GotoTop()
-	m.mode = modeDetail
-	m.focus = focusMain
+	m.openDetailRow(m.result.Raw[i])
 }
 
 func (m *Model) toggleDrawer() {

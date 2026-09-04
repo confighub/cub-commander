@@ -87,6 +87,80 @@ func (c *Client) List(ctx context.Context, path string, q url.Values) ([]Row, er
 	return rows, nil
 }
 
+// ConflictError is a 409: the entity changed since it was read.
+type ConflictError struct{ Message string }
+
+func (e *ConflictError) Error() string { return e.Message }
+
+// GetRawETag performs a GET returning the body as text and the ETag the
+// server served (for unit data, the DataHash), for a later conditional PUT.
+func (c *Client) GetRawETag(ctx context.Context, path string) (string, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	res, err := c.http.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return "", "", err
+	}
+	if res.StatusCode >= 300 {
+		return "", "", &APIError{res.StatusCode, strings.TrimSpace(string(body))}
+	}
+	return string(body), strings.Trim(res.Header.Get("ETag"), "\""), nil
+}
+
+// PutRaw performs a PUT of a raw body, conditional on ifMatch when set. A 409
+// comes back as *ConflictError; a 2xx body is decoded into a Row when JSON.
+func (c *Client) PutRaw(ctx context.Context, path string, body string, ifMatch string, q url.Values) (Row, error) {
+	u := c.base + path
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	if ifMatch != "" {
+		req.Header.Set("If-Match", ifMatch)
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	out, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode == http.StatusConflict {
+		var e struct{ Message string }
+		_ = json.Unmarshal(out, &e)
+		return nil, &ConflictError{Message: strings.TrimSpace(e.Message)}
+	}
+	if res.StatusCode >= 300 {
+		var e struct{ Message string }
+		_ = json.Unmarshal(out, &e)
+		msg := strings.TrimSpace(e.Message)
+		if msg == "" {
+			msg = strings.TrimSpace(string(out))
+		}
+		return nil, &APIError{res.StatusCode, msg}
+	}
+	var row Row
+	if len(out) > 0 && json.Unmarshal(out, &row) != nil {
+		return nil, nil
+	}
+	return row, nil
+}
+
 // GetRaw performs a GET returning the body as text (unit data is YAML).
 func (c *Client) GetRaw(ctx context.Context, path string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)

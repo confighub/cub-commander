@@ -15,6 +15,7 @@ of truth; update it when state changes. Design: `design.md`.
 | M7 | Topology browse | `BROWSE Unit BY UPSTREAM` clone tree and `BY LINKS` in the tree renderer; component × variant × target as a browse preset. | todo |
 | M8 | Diff | selection-vs-selection (shipped 2026-09-04: `diff A vs B [by …]`, auto pairing with refinement, DataHash classification, lazy data diff, marks in browse with m/d); still to come: revisions, unit-with-live, changeset; a Diff tab in Detail. | in progress |
 | M9 | Hardening for the fleet dataset | Budgets and hints on the cub-demo ~100-cluster org; lazy sampling; `\watch`; `cub …` line pass-through in the command area. | todo |
+| P2a | Edit one unit's data in $EDITOR with If-Match (shipped 2026-09-04) | `e` on the Data tab of a unit's detail; conflicts reload the head and keep the draft. | done |
 | P2 | Write phase design | `UPDATE`/`DELETE`/`CALL … WHERE` with live dry-run preview, changesets as transactions. Separate design doc. | gated on phase 1 |
 
 Product asks raised by the lab, to file as issues when they bite:

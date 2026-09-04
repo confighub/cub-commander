@@ -516,13 +516,6 @@ func (m Model) commitBrowse(panes [][]paneItem) (tea.Model, tea.Cmd) {
 	return m.rewrite(&st)
 }
 
-func (m *Model) openDetailRow(row cubclient.Row) {
-	m.detail.SetContent(renderRow(row))
-	m.detail.GotoTop()
-	m.mode = modeDetail
-	m.focus = focusMain
-}
-
 // browseView renders the panes side by side.
 func (m Model) browseView() string {
 	b := m.browse

@@ -74,7 +74,7 @@ func (m *Model) layout() {
 	m.tbl.SetWidth(mw)
 	m.tbl.SetHeight(mh)
 	m.detail.SetWidth(mw)
-	m.detail.SetHeight(mh)
+	m.detail.SetHeight(mh - 1)
 	m.text.SetWidth(mw)
 	m.text.SetHeight(mh)
 	m.fillTable()
@@ -98,6 +98,10 @@ func (m Model) View() tea.View {
 		main = m.overlayPopup(main)
 	}
 	b.WriteString(main + "\n")
+	if m.mode == modeDetail {
+		// the detail header takes one line of the main area
+		main = lipgloss.NewStyle().MaxHeight(m.mainHeight()).Render(main)
+	}
 	b.WriteString(m.cmdTitle() + "\n")
 	b.WriteString(m.cmd.View() + "\n")
 	b.WriteString(m.statusLine() + "\n")
@@ -207,7 +211,7 @@ func (m Model) mainView() string {
 			body = m.tbl.View()
 		}
 	case modeDetail:
-		body = m.detail.View()
+		body = m.detailView()
 	default:
 		body = m.text.View()
 	}
@@ -383,6 +387,11 @@ counts, then the matching Units, then a Resources pane (r toggles it; → from U
 the highlighted unit once you step into Units. ←→ panes, ↑↓ values, ⏎ open a row, p adds a preview pane on
 the right (the selected unit's resources, then the row's fields, then off), g turns the
 selections into where steps and shows the grid, b returns to the chooser.
+
+Detail (Enter on a row): tabs 1 Metadata · 2 Data (←→ switch). On Data: e opens $EDITOR on the
+unit's configuration and, when you save and exit, posts it as a new revision, conditional on
+the DataHash you read (If-Match). A conflict reloads the head and keeps your edit for the next
+e. R reloads. Only unit data is editable; everything else stays read-only.
 
 Keys on a results row
   Enter  detail            f  add "where <column> = <value>" for the focused cell (←→ move)

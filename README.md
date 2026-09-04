@@ -23,7 +23,8 @@ cd cub-commander
 make plugin        # builds and runs: cub plugin install ./bin/cub-commander
 ```
 
-Everything is read-only against your ConfigHub org. The first screen is the "browse by"
+Everything is read-only against your ConfigHub org, with one exception: `e` on a unit's
+Data tab opens `$EDITOR` and saves your edit as a new revision, guarded by the hash you read. The first screen is the "browse by"
 chooser; `^/` shows the keys. This is an early lab, so expect rough edges and a moving
 language; the design is in `docs/design.md`.
 

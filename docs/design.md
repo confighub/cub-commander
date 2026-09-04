@@ -548,7 +548,14 @@ See `roadmap.md` for milestones.
 
 ## 9. Phase 2 sketch (write)
 
-The read design is shaped so write drops in without a new language:
+*First write shipped 2026-09-04, deliberately narrow: editing one unit's data.* In the
+detail view the Data tab holds the configuration; `e` opens `$EDITOR` on it and, on exit,
+posts the result as a new revision through the data endpoint with `If-Match` set to the
+DataHash the read served. A 409 means someone wrote first: the head is reloaded, your buffer
+is kept, and the next `e` reopens it against the new head. An unchanged buffer saves nothing.
+Nothing else writes.
+
+The read design is shaped so the rest of write drops in without a new language:
 
 - `UPDATE Unit SET Labels.reviewed = 'true' WHERE …` → `cub unit update --patch --label …
   --where …`. `DELETE FROM Unit WHERE …`. Every statement runs as a dry run first and shows

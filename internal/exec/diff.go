@@ -310,6 +310,56 @@ func UnitData(ctx context.Context, c *cubclient.Client, row cubclient.Row) (stri
 	return c.GetRaw(ctx, "/space/"+sid+"/unit/"+uid+"/data")
 }
 
+// unitPath is the API path of a unit row.
+func unitPath(row cubclient.Row) (string, error) {
+	own, _ := row["Unit"].(map[string]any)
+	uid, _ := own["UnitID"].(string)
+	sid, _ := own["SpaceID"].(string)
+	if sid == "" {
+		if sp, ok := row["Space"].(map[string]any); ok {
+			sid, _ = sp["SpaceID"].(string)
+		}
+	}
+	if uid == "" || sid == "" {
+		return "", fmt.Errorf("row has no UnitID/SpaceID")
+	}
+	return "/space/" + sid + "/unit/" + uid, nil
+}
+
+// UnitDataWithHash fetches a unit's data and the DataHash the server served
+// with it, which a later SaveUnitData sends as If-Match.
+func UnitDataWithHash(ctx context.Context, c *cubclient.Client, row cubclient.Row) (string, string, error) {
+	p, err := unitPath(row)
+	if err != nil {
+		return "", "", err
+	}
+	return c.GetRawETag(ctx, p+"/data")
+}
+
+// SaveUnitData writes new data as a revision, conditional on the hash the
+// data was read at. Returns the new head revision number when the server
+// reports it.
+func SaveUnitData(ctx context.Context, c *cubclient.Client, row cubclient.Row, text, ifMatch, description string) (int, error) {
+	p, err := unitPath(row)
+	if err != nil {
+		return 0, err
+	}
+	q := url.Values{}
+	if description != "" {
+		q.Set("last_change_description", description)
+	}
+	res, err := c.PutRaw(ctx, p+"/data", text, ifMatch, q)
+	if err != nil {
+		return 0, err
+	}
+	if u, ok := res["Unit"].(map[string]any); ok {
+		if n, ok := u["HeadRevisionNum"].(float64); ok {
+			return int(n), nil
+		}
+	}
+	return 0, nil
+}
+
 // RowName is space/slug for a unit row.
 func RowName(r cubclient.Row) string {
 	own, _ := r["Unit"].(map[string]any)

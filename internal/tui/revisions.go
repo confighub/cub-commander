@@ -65,7 +65,7 @@ func (m *Model) openRevisions() tea.Cmd {
 		return nil
 	}
 	d.picker = &revPicker{mark: -1, loading: true}
-	row, load := d.row, m.revLoader
+	row, load := d.unitRow, m.revLoader
 	id := unitID(row)
 	// The picker diffs against the data on screen, so make sure it is loaded
 	// and shown: d from the Metadata tab moves to Data.
@@ -79,7 +79,7 @@ func (m *Model) openRevisions() tea.Cmd {
 
 func (m *Model) revisionsLoaded(msg revisionsMsg) {
 	d := m.det
-	if d == nil || d.picker == nil || unitID(d.row) != msg.unitID {
+	if d == nil || d.picker == nil || d.unitKey() != msg.unitID {
 		return
 	}
 	d.picker.loading = false
@@ -147,7 +147,7 @@ func (m Model) runRevDiff() (tea.Model, tea.Cmd) {
 		m.setStatus("no revision data loader configured", true)
 		return m, nil
 	}
-	row, load := d.row, m.revDataLoader
+	row, load := d.unitRow, m.revDataLoader
 	uid := unitID(row)
 	if p.mark >= 0 && p.mark != p.cur {
 		marked := p.rows[p.mark]

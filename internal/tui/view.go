@@ -410,7 +410,9 @@ selections into where steps and shows the grid, b returns to the chooser.
 Detail (Enter on a row): tabs 1 Metadata · 2 Data (←→ switch). On Data: e opens $EDITOR on the
 unit's configuration and, when you save and exit, posts it as a new revision, conditional on
 the DataHash you read (If-Match). A conflict reloads the head and keeps your edit for the next
-e. R reloads. d lists the unit's revisions: ⏎ diffs the highlighted one against the current
+e. R reloads. A resource opens the same way: its Data tab is its own document, and e edits
+that document; the save writes the unit with the document replaced, under the unit's hash.
+d lists the unit's revisions: ⏎ diffs the highlighted one against the current
 data, m marks one and ⏎ on another diffs the two; Esc returns to the list, Esc again closes
 it. The pivot keys
 work here too: u on a space lists its units, s on a unit shows its space's units, r revisions.

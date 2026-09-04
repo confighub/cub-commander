@@ -177,8 +177,8 @@ func stubResources(t *testing.T) Runner {
 			return nil, err
 		}
 		rows := []cubclient.Row{
-			{"Resource": map[string]any{"ResourceType": "apps/v1/Deployment", "ResourceName": "/cart/api", "ResourceID": "r1", "UnitID": "u1"}, "Unit": map[string]any{"Slug": "api", "Labels": map[string]any{"Cluster": "c1"}}, "Space": map[string]any{"Slug": "cart-c1"}},
-			{"Resource": map[string]any{"ResourceType": "v1/Service", "ResourceName": "/cart/api", "ResourceID": "r2", "UnitID": "u1"}, "Unit": map[string]any{"Slug": "api", "Labels": map[string]any{"Cluster": "c1"}}, "Space": map[string]any{"Slug": "cart-c1"}},
+			{"Resource": map[string]any{"ResourceType": "apps/v1/Deployment", "ResourceName": "cart/api", "ResourceID": "r1", "UnitID": "u1"}, "Unit": map[string]any{"Slug": "api", "Labels": map[string]any{"Cluster": "c1"}}, "Space": map[string]any{"Slug": "cart-c1"}},
+			{"Resource": map[string]any{"ResourceType": "v1/Service", "ResourceName": "cart/api", "ResourceID": "r2", "UnitID": "u1"}, "Unit": map[string]any{"Slug": "api", "Labels": map[string]any{"Cluster": "c1"}}, "Space": map[string]any{"Slug": "cart-c1"}},
 			{"Resource": map[string]any{"ResourceType": "v1/Namespace", "ResourceName": "/cart", "ResourceID": "r3", "UnitID": "u2"}, "Unit": map[string]any{"Slug": "namespace", "Labels": map[string]any{"Cluster": "c2"}}, "Space": map[string]any{"Slug": "cart-c2"}},
 		}
 		res, err := exec.Local(p, rows)

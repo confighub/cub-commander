@@ -224,8 +224,13 @@ func Compile(st *lang.SelectStmt, s Session) (*Plan, error) {
 		sel[segs[0]] = true
 	}
 	// Every included join gets at least its Slug selected, so an unreferenced
-	// join (included for pivots and row labels) comes back trimmed too.
+	// join (included for pivots and row labels) comes back trimmed too. The
+	// entity's own ID field for the join (UnitID on a Resource) is selected as
+	// well: the detail view walks from a resource to its unit through it.
 	for id := range inc {
+		if _, own := catalog.Attribute(ent.Name, id); own {
+			sel[id] = true
+		}
 		join := strings.TrimSuffix(id, "ID")
 		if je := catalog.JoinEntity(join); je != "" {
 			if _, ok := catalog.Attribute(je, "Slug"); ok {

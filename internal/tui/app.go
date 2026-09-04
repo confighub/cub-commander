@@ -217,15 +217,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openDetailRow(msg.row)
 		return m, nil
 	case unitDataMsg:
-		if m.det != nil && unitID(m.det.row) == msg.unitID {
-			m.det.loading = false
-			if msg.err != nil {
-				m.setStatus("unit data: "+msg.err.Error(), true)
-			} else {
-				m.det.data, m.det.hash, m.det.loaded = msg.text, msg.hash, true
-			}
-			m.renderDetail()
-		}
+		m.dataLoaded(msg)
 		return m, nil
 	case revisionsMsg:
 		m.revisionsLoaded(msg)

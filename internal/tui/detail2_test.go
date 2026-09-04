@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -192,5 +193,60 @@ func TestPickerFromMetadataAndEsc(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
 	if mm = m.(Model); mm.det.tab != 1 || mm.det.picker != nil {
 		t.Errorf("after re-enter: tab=%d picker=%v", mm.det.tab, mm.det.picker != nil)
+	}
+}
+
+// A resource's Data tab is its document; e edits it and the save writes the
+// whole unit with that document replaced, under the unit's hash.
+func TestResourceDetailEdit(t *testing.T) {
+	var m tea.Model = New(planSession(), stubResources(t), nil, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
+	mm := m.(Model)
+	mm.chooserOpen, mm.focus = false, focusCmd
+	unit := "---\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: cart\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: cart\nspec:\n  replicas: 1\n"
+	var savedText, savedHash string
+	mm.dataLoader = func(ctx context.Context, row cubclient.Row) (string, string, error) {
+		if unitID(row) != "u1" {
+			t.Errorf("loader got unit %q", unitID(row))
+		}
+		return unit, "unit-hash", nil
+	}
+	mm.dataSaver = func(ctx context.Context, row cubclient.Row, text, ifMatch string) (int, error) {
+		savedText, savedHash = text, ifMatch
+		return 5, nil
+	}
+	m = typeText(mm, "Resource | in * | browse by Unit.Labels.Cluster")
+	m = press(m, "enter")
+	mm = m.(Model)
+	mm.browse.pane = 1 // the Resources pane; first item is the c1 Deployment cart/api
+	m, _ = mm.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	mm = m.(Model)
+	if mm.mode != modeDetail || mm.det.entity != "Resource" || !mm.det.editable() {
+		t.Fatalf("resource detail: mode=%v entity=%q", mm.mode, mm.det.entity)
+	}
+	var cmd tea.Cmd
+	m, cmd = mm.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	if cmd == nil {
+		t.Fatal("no load")
+	}
+	m, _ = m.Update(cmd())
+	mm = m.(Model)
+	if !mm.det.loaded || mm.det.docIndex != 1 || !strings.HasPrefix(mm.det.data, "apiVersion: apps/v1") {
+		t.Fatalf("document: loaded=%v idx=%d data=%q status=%q", mm.det.loaded, mm.det.docIndex, mm.det.data, mm.status)
+	}
+	if v := m.View().Content; !strings.Contains(v, "document 2 of 2") || strings.Contains(v, "kind: Namespace") {
+		t.Errorf("resource data tab:\n%s", v)
+	}
+	f, _ := os.CreateTemp("", "edit-*.yaml")
+	f.WriteString(strings.Replace(mm.det.data, "replicas: 1", "replicas: 3", 1))
+	f.Close()
+	m, cmd = mm.Update(editedMsg{path: f.Name()})
+	m, _ = m.Update(cmd())
+	mm = m.(Model)
+	if savedHash != "unit-hash" || !strings.Contains(savedText, "kind: Namespace") || !strings.Contains(savedText, "replicas: 3") || strings.Contains(savedText, "replicas: 1") {
+		t.Errorf("spliced save: hash=%q text=%q", savedHash, savedText)
+	}
+	if !strings.Contains(mm.status, "revision 5") {
+		t.Errorf("status: %q", mm.status)
 	}
 }

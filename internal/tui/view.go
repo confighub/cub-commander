@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -194,6 +195,9 @@ func (m Model) chipsRow() string {
 func (m Model) mainView() string {
 	w, h := m.mainWidth(), m.mainHeight()
 	var body string
+	if m.running {
+		return lipgloss.NewStyle().Width(w).Height(h).MaxWidth(w).MaxHeight(h).Render(m.loadingView())
+	}
 	if m.chooserOpen {
 		return lipgloss.NewStyle().Width(w).Height(h).MaxWidth(w).MaxHeight(h).Render(m.chooserView())
 	}
@@ -216,6 +220,21 @@ func (m Model) mainView() string {
 		body = m.text.View()
 	}
 	return lipgloss.NewStyle().Width(w).Height(h).MaxWidth(w).MaxHeight(h).Render(body)
+}
+
+// loadingView replaces the main area while a statement runs, so a stale
+// screen never looks like the answer.
+func (m Model) loadingView() string {
+	elapsed := time.Since(m.runStart).Truncate(100 * time.Millisecond)
+	dots := strings.Repeat("·", int(elapsed/(300*time.Millisecond))%4)
+	var b strings.Builder
+	b.WriteString("\n\n")
+	b.WriteString(titleStyle.Render("   Running") + " " + dimStyle.Render(fmt.Sprintf("%s  %.1fs", dots, elapsed.Seconds())) + "\n\n")
+	for _, line := range strings.Split(strings.TrimSpace(m.runningSrc), "\n") {
+		b.WriteString("   " + chipStyle.Render(line) + "\n")
+	}
+	b.WriteString("\n" + dimStyle.Render("   an org-wide list is one call; a large org takes a few seconds"))
+	return b.String()
 }
 
 func (m Model) drawerView() string {
@@ -391,7 +410,10 @@ selections into where steps and shows the grid, b returns to the chooser.
 Detail (Enter on a row): tabs 1 Metadata · 2 Data (←→ switch). On Data: e opens $EDITOR on the
 unit's configuration and, when you save and exit, posts it as a new revision, conditional on
 the DataHash you read (If-Match). A conflict reloads the head and keeps your edit for the next
-e. R reloads. Only unit data is editable; everything else stays read-only.
+e. R reloads. d lists the unit's revisions: ⏎ diffs the highlighted one against the current
+data, m marks one and ⏎ on another diffs the two; Esc returns to the list, Esc again closes
+it. The pivot keys
+work here too: u on a space lists its units, s on a unit shows its space's units, r revisions.
 
 Keys on a results row
   Enter  detail            f  add "where <column> = <value>" for the focused cell (←→ move)

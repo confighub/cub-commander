@@ -18,13 +18,7 @@ func TestHopFromStatement(t *testing.T) {
 	// run the statement and then the fetch it schedules
 	var cmd tea.Cmd
 	m, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	for i := 0; i < 3 && cmd != nil; i++ {
-		msg := cmd()
-		if msg == nil {
-			break
-		}
-		m, cmd = m.Update(msg)
-	}
+	m = runCmd(m, cmd, 0)
 	mm = m.(Model)
 	if mm.browse == nil || !mm.browse.hop || mm.browse.pane != 0 {
 		t.Fatalf("browse: %+v", mm.browse)

@@ -349,16 +349,25 @@ func (m *Model) markCurrent() {
 		parts[i] = lang.ExprString(t)
 	}
 	mk := mark{terms: terms, label: strings.Join(parts, " AND ")}
+	// Marks behave like a set of at most two: marking a marked selection
+	// unmarks it, a third mark replaces B.
+	for i, existing := range m.marks {
+		if existing.label == mk.label {
+			m.marks = append(m.marks[:i], m.marks[i+1:]...)
+			m.setStatus(fmt.Sprintf("unmarked %s   (%d mark left)", mk.label, len(m.marks)), false)
+			return
+		}
+	}
 	switch len(m.marks) {
 	case 0:
 		m.marks = append(m.marks, mk)
-		m.setStatus("A marked: "+mk.label+"   (mark B, then d to diff)", false)
+		m.setStatus("A marked: "+mk.label+"   (move to the other side, mark it with m, then d)", false)
 	case 1:
 		m.marks = append(m.marks, mk)
-		m.setStatus("B marked: "+mk.label+"   (d to diff, M to clear)", false)
+		m.setStatus("B marked: "+mk.label+"   (d diffs A vs B · M clears)", false)
 	default:
-		m.marks = []mark{mk}
-		m.setStatus("marks reset; A marked: "+mk.label, false)
+		m.marks[1] = mk
+		m.setStatus("B replaced: "+mk.label+"   (A is still "+m.marks[0].label+")", false)
 	}
 }
 
@@ -373,14 +382,19 @@ func (m Model) diffMarks() (tea.Model, tea.Cmd) {
 	if len(marks) == 1 {
 		cur := m.browse.selections(m.browse.panes())
 		if len(cur) == 0 {
-			m.setStatus("mark a second selection (m) or move onto one", true)
+			m.setStatus("A is marked as "+marks[0].label+"; move onto the other side and press d, or mark it with m", true)
 			return m, nil
 		}
 		parts := make([]string, len(cur))
 		for i, t := range cur {
 			parts[i] = lang.ExprString(t)
 		}
-		marks = append(marks, mark{terms: cur, label: strings.Join(parts, " AND ")})
+		cl := strings.Join(parts, " AND ")
+		if cl == marks[0].label {
+			m.setStatus("A is marked as "+cl+" and you are still on it; move onto the other side (or mark it with m) and press d", true)
+			return m, nil
+		}
+		marks = append(marks, mark{terms: cur, label: cl})
 	}
 	if len(marks) < 2 {
 		m.setStatus("mark two selections with m, then d", true)
@@ -405,7 +419,7 @@ func (m Model) diffMarks() (tea.Model, tea.Cmd) {
 	}
 	a, bb := side(marks[0]), side(marks[1])
 	if len(a) == 0 || len(bb) == 0 {
-		m.setStatus("the two marks are the same selection", true)
+		m.setStatus(fmt.Sprintf("nothing to diff: A is %s and B is %s; one contains the other", marks[0].label, marks[1].label), true)
 		return m, nil
 	}
 	st := *m.stmt

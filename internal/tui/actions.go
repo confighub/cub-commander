@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/confighub/cub-commander/internal/cubclient"
 	"github.com/confighub/cub-commander/internal/exec"
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
@@ -205,7 +206,7 @@ func (m Model) toggleOrder() (tea.Model, tea.Cmd) {
 	return m.rewrite(&st)
 }
 
-// pivot rewrites the statement around the selected row.
+// pivot rewrites the statement around the selected grid row.
 func (m Model) pivot(k string) (tea.Model, tea.Cmd) {
 	if m.result == nil || m.result.Raw == nil {
 		m.setStatus("pivots need ungrouped rows", true)
@@ -215,8 +216,13 @@ func (m Model) pivot(k string) (tea.Model, tea.Cmd) {
 	if i < 0 || i >= len(m.result.Raw) {
 		return m, nil
 	}
-	raw := m.result.Raw[i]
-	ent := m.plan.Entity.Name
+	return m.pivotRow(k, m.result.Raw[i], m.plan.Entity.Name)
+}
+
+// pivotRow rewrites the statement around a row of the given entity:
+// s its space's units, t its target's units, u upstream / a space's units,
+// d downstreams, r revisions, l links.
+func (m Model) pivotRow(k string, raw cubclient.Row, ent string) (tea.Model, tea.Cmd) {
 	own, _ := raw[ent].(map[string]any)
 	get := func(obj map[string]any, f string) string {
 		if obj == nil {
@@ -261,6 +267,9 @@ func (m Model) pivot(k string) (tea.Model, tea.Cmd) {
 			return sel("Unit", eq("TargetID", get(own, "TargetID")), nil)
 		}
 	case "u":
+		if ent == "Space" && spaceSlug != "" {
+			return m.rewrite(&lang.SelectStmt{Star: true, From: lang.Source{Entity: "Unit"}, Scope: &lang.Scope{Space: spaceSlug}})
+		}
 		if id := get(own, "UpstreamUnitID"); id != "" {
 			return sel("Unit", eq("UnitID", id), nil)
 		}

@@ -30,6 +30,8 @@ func Run(sess plan.Session) error {
 	m.fetcher = client.List
 	m.dataFetcher = func(ctx context.Context, row cubclient.Row) (string, error) { return exec.UnitData(ctx, client, row) }
 	m.dataLoader = func(ctx context.Context, row cubclient.Row) (string, string, error) { return exec.UnitDataWithHash(ctx, client, row) }
+	m.revLoader = func(ctx context.Context, row cubclient.Row) ([]cubclient.Row, error) { return revisionRows(ctx, client, row) }
+	m.revDataLoader = func(ctx context.Context, row cubclient.Row, id string) (string, error) { return revisionData(ctx, client, row, id) }
 	m.dataSaver = func(ctx context.Context, row cubclient.Row, text, ifMatch string) (int, error) {
 		return exec.SaveUnitData(ctx, client, row, text, ifMatch, editDescription)
 	}

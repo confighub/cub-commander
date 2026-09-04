@@ -37,6 +37,37 @@ func stubRunner(t *testing.T) Runner {
 // command for every typed letter.
 var runKeys = map[string]bool{"enter": true, "f": true, "-": true, "o": true, "r": true, "g": true}
 
+// runCmd executes a command and feeds its message back, flattening batches
+// (a statement run is batched with the loading tick).
+func runCmd(m tea.Model, cmd tea.Cmd, depth int) tea.Model {
+	if cmd == nil || depth > 4 {
+		return m
+	}
+	out := cmd()
+	if b, ok := out.(tea.BatchMsg); ok {
+		for _, c := range b {
+			m = runCmd(m, c, depth+1)
+		}
+		return m
+	}
+	if out == nil {
+		return m
+	}
+	if _, isTick := out.(tickMsg); isTick {
+		return m // the tick only reschedules itself while running
+	}
+	var next tea.Cmd
+	m, next = m.Update(out)
+	if next != nil && depth < 2 {
+		// follow one level (e.g. a browse result scheduling a fetch), but not ticks
+		if _, isTickCmd := next().(tickMsg); !isTickCmd {
+			// re-run since we consumed it: cheap for stubs
+			m = runCmd(m, next, depth+1)
+		}
+	}
+	return m
+}
+
 func press(m tea.Model, keys ...string) tea.Model {
 	for _, k := range keys {
 		var msg tea.KeyPressMsg
@@ -67,9 +98,7 @@ func press(m tea.Model, keys ...string) tea.Model {
 		// Only run commands for keys that execute statements; the textarea's
 		// cursor-blink tick would otherwise sleep on every keystroke.
 		if cmd != nil && runKeys[k] {
-			if out := cmd(); out != nil {
-				m, _ = m.Update(out)
-			}
+			m = runCmd(m, cmd, 0)
 		}
 	}
 	return m

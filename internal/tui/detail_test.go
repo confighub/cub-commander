@@ -92,6 +92,19 @@ func TestDetailTabsAndEdit(t *testing.T) {
 	if cmd != nil || !strings.Contains(m.(Model).status, "no changes") {
 		t.Errorf("unchanged: %q", m.(Model).status)
 	}
+	// Without a hash from the read the write is refused rather than sent unconditionally.
+	mm = m.(Model)
+	mm.det.hash = ""
+	f4, _ := os.CreateTemp("", "edit-*.yaml")
+	f4.WriteString("replicas: 9\n")
+	f4.Close()
+	m, cmd = mm.Update(editedMsg{path: f4.Name()})
+	if cmd != nil || !strings.Contains(m.(Model).status, "cannot be made conditional") || m.(Model).det.draft != "replicas: 9\n" {
+		t.Errorf("no-hash guard: %q", m.(Model).status)
+	}
+	mm = m.(Model)
+	mm.det.hash = "hash-1"
+	m = mm
 	// Esc returns to the grid.
 	m = press(m, "esc")
 	if m.(Model).mode != modeResults {

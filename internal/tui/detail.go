@@ -30,6 +30,7 @@ type detailState struct {
 	loading bool
 	draft   string // your last edit when the save conflicted
 	from    mode   // where Esc returns
+	picker  *revPicker
 }
 
 // DataLoader reads a unit's data and hash; DataSaver writes it conditionally.
@@ -64,8 +65,9 @@ func (m *Model) openDetailRow(row cubclient.Row) {
 		entity = "Resource"
 	}
 	if m.det != nil && m.det.row != nil && unitID(m.det.row) == unitID(row) && unitID(row) != "" {
-		// same unit: keep the loaded data and draft
+		// same unit: keep the loaded data and draft, but never a stale picker
 		m.det.row = row
+		m.det.picker = nil
 	} else {
 		m.det = &detailState{row: row, entity: entity, from: m.mode}
 	}
@@ -119,17 +121,28 @@ func (m Model) detailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if d == nil {
 		return m, nil
 	}
+	if d.picker != nil {
+		return m.pickerKey(k)
+	}
 	switch k.String() {
-	case "1", "[", "left", "h":
+	case "d":
+		return m, m.openRevisions()
+	case "D":
+		if d.entity == "Resource" {
+			return m, nil
+		}
+		return m.pivotRow("d", d.row, d.entity)
+	case "1", "[", "left":
 		d.tab = 0
 		m.renderDetail()
 		return m, nil
-	case "2", "]", "right", "l", "tab":
+	case "2", "]", "right", "tab":
 		if d.entity == "Unit" {
 			d.tab = 1
 			m.renderDetail()
 			return m, m.detailLoad()
 		}
+		m.setStatus(fmt.Sprintf("a %s has only Metadata; open a unit for its Data", d.entity), true)
 		return m, nil
 	case "e":
 		if d.entity != "Unit" {
@@ -149,6 +162,11 @@ func (m Model) detailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		d.loaded, d.loading = false, false
 		m.renderDetail()
 		return m, m.detailLoad()
+	case "s", "t", "u", "r", "l":
+		if d.entity == "Resource" {
+			return m, nil
+		}
+		return m.pivotRow(k.String(), d.row, d.entity)
 	case "q":
 		return m, tea.Quit
 	case "?":
@@ -218,6 +236,12 @@ func (m *Model) afterEdit(msg editedMsg) tea.Cmd {
 		m.setStatus("no saver configured", true)
 		return nil
 	}
+	if d.hash == "" {
+		// An absent If-Match is an unconditional write on the server; never send one.
+		d.draft = text
+		m.setStatus("the read served no ETag, so the write cannot be made conditional; not saved (R reloads, e reopens the draft)", true)
+		return nil
+	}
 	d.draft = text
 	row, hash, save := d.row, d.hash, m.dataSaver
 	id := unitID(row)
@@ -285,9 +309,20 @@ func (m Model) detailView() string {
 		if d.draft != "" {
 			extra += localChipStyle.Render("  unsaved draft (e reopens it)")
 		}
-		extra += dimStyle.Render("  · e edit · R reload")
+		extra += dimStyle.Render("  · e edit · d diff revisions · R reload")
+	}
+	switch {
+	case d.entity == "Space":
+		extra = dimStyle.Render("  (Space: metadata only · u lists its units · t its targets)")
+	case d.entity != "Unit":
+		extra = dimStyle.Render("  (" + d.entity + ": metadata only)")
+	case d.tab == 0:
+		extra = dimStyle.Render("  2 or → for Data · d diff revisions · s space · r revisions · l links")
 	}
 	head := lipgloss.NewStyle().MaxWidth(w).Render(titleStyle.Render(" "+name) + "  " + strings.Join(parts, " ") + extra)
+	if d.picker != nil {
+		return head + "\n" + m.pickerView(w)
+	}
 	return head + "\n" + m.detail.View()
 }
 

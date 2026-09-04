@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/table"
@@ -87,9 +88,12 @@ type Model struct {
 	drawerItems  []history.Entry
 
 	// detail
-	det        *detailState
-	dataLoader DataLoader
-	dataSaver  DataSaver
+	det           *detailState
+	dataLoader    DataLoader
+	dataSaver     DataSaver
+	revLoader     RevLoader
+	revDataLoader RevDataLoader
+	textFrom      mode
 
 	// diff
 	diff        *diffState
@@ -112,9 +116,11 @@ type Model struct {
 	popupSel   int
 	popupOpen  bool
 
-	status    string
-	statusErr bool
-	running   bool
+	status     string
+	statusErr  bool
+	running    bool
+	runningSrc string
+	runStart   time.Time
 	kitty     bool
 	helpOpen  bool
 }
@@ -134,6 +140,12 @@ type errMsg struct {
 	err error
 }
 type sampledMsg struct{ err error }
+type tickMsg time.Time
+
+// tick keeps the loading panel's elapsed time moving while a statement runs.
+func tick() tea.Cmd {
+	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
 
 func New(sess plan.Session, runner Runner, sampler Sampler, hist *history.Store) Model {
 	ta := textarea.New()
@@ -181,6 +193,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyReleaseMsg:
 		return m, nil
+	case tickMsg:
+		if m.running {
+			return m, tick()
+		}
+		return m, nil
 	case resourcesMsg:
 		byUnit := map[string][]cubclient.Row{}
 		for _, r := range msg.rows {
@@ -209,6 +226,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.renderDetail()
 		}
+		return m, nil
+	case revisionsMsg:
+		m.revisionsLoaded(msg)
+		return m, nil
+	case revDiffMsg:
+		m.revDiffLoaded(msg)
 		return m, nil
 	case editedMsg:
 		return m, m.afterEdit(msg)
@@ -306,6 +329,9 @@ func (m *Model) setStatus(s string, isErr bool) {
 }
 
 func (m *Model) showText(title, body string) {
+	if m.mode != modeText {
+		m.textFrom = m.mode
+	}
 	m.textTitle = title
 	m.text.SetContent(body)
 	m.text.GotoTop()
@@ -318,6 +344,10 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// An open completion popup owns the keys that navigate or close it.
 	if m.popupOpen && m.focus == focusCmd {
 		return m.cmdKey(k)
+	}
+	// So does an open revision picker in the detail view (Esc closes it, not the view).
+	if m.mode == modeDetail && m.focus == focusMain && m.det != nil && m.det.picker != nil {
+		return m.pickerKey(k)
 	}
 	// Global.
 	// No F-keys: they are awkward on a Mac. Everything global is a control chord
@@ -369,6 +399,10 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.openChooser()
 			}
+		case m.mode == modeText && m.textFrom == modeDetail && m.det != nil:
+			m.mode = modeDetail
+		case m.mode == modeText && (m.textFrom == modeBrowse && m.browse != nil || m.textFrom == modeDiff && m.diff != nil):
+			m.mode = m.textFrom
 		case m.mode == modeText && m.result != nil:
 			m.mode = modeResults
 		case m.mode == modeDiff:
@@ -389,6 +423,9 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.toggleFocus()
 		return m, nil
 	case "tab":
+		if m.focus == focusMain && m.mode == modeDetail && !m.drawerOpen {
+			return m.detailKey(k) // Tab switches detail tabs; ⇧Tab still moves focus
+		}
 		if m.focus != focusCmd || m.drawerOpen {
 			m.toggleFocus()
 			return m, nil
@@ -755,10 +792,12 @@ func (m Model) execute(src string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.running = true
+	m.runningSrc = src
+	m.runStart = time.Now()
 	m.setStatus("running…", false)
 	sess := m.sess
 	runner := m.runner
-	return m, func() tea.Msg {
+	return m, tea.Batch(tick(), func() tea.Msg {
 		var last tea.Msg
 		for _, st := range rest {
 			msg, err := runner(context.Background(), st, sess)
@@ -779,7 +818,7 @@ func (m Model) execute(src string) (tea.Model, tea.Cmd) {
 			return x
 		}
 		return last
-	}
+	})
 }
 
 // rewrite replaces the command area with a statement and runs it.

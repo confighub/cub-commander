@@ -121,8 +121,8 @@ type Model struct {
 	running    bool
 	runningSrc string
 	runStart   time.Time
-	kitty     bool
-	helpOpen  bool
+	kitty      bool
+	helpOpen   bool
 }
 
 // Messages.

@@ -36,12 +36,12 @@ type revisionsMsg struct {
 	err    error
 }
 type revDiffMsg struct {
-	unitID   string
-	title    string
-	a, b     string // texts
-	labelA   string
-	labelB   string
-	err      error
+	unitID string
+	title  string
+	a, b   string // texts
+	labelA string
+	labelB string
+	err    error
 }
 
 func revField(r cubclient.Row, f string) any {

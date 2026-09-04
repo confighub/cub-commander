@@ -85,7 +85,9 @@ func TestRevisionPickerDiff(t *testing.T) {
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	mm := m.(Model)
 	mm.chooserOpen, mm.focus = false, focusCmd
-	mm.dataLoader = func(ctx context.Context, row cubclient.Row) (string, string, error) { return "replicas: 3\n", "h3", nil }
+	mm.dataLoader = func(ctx context.Context, row cubclient.Row) (string, string, error) {
+		return "replicas: 3\n", "h3", nil
+	}
 	mm.revLoader = func(ctx context.Context, row cubclient.Row) ([]cubclient.Row, error) {
 		mk := func(n float64, id, desc string) cubclient.Row {
 			return cubclient.Row{"Revision": map[string]any{"RevisionNum": n, "RevisionID": id, "CreatedAt": "2026-09-01T10:00:00Z", "Description": desc, "Source": "UpdateUnit"}, "User": map[string]any{"Username": "me"}}
@@ -144,7 +146,9 @@ func TestPickerFromMetadataAndEsc(t *testing.T) {
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	mm := m.(Model)
 	mm.chooserOpen, mm.focus = false, focusCmd
-	mm.dataLoader = func(ctx context.Context, row cubclient.Row) (string, string, error) { return "replicas: 3\n", "h3", nil }
+	mm.dataLoader = func(ctx context.Context, row cubclient.Row) (string, string, error) {
+		return "replicas: 3\n", "h3", nil
+	}
 	mm.revLoader = func(ctx context.Context, row cubclient.Row) ([]cubclient.Row, error) {
 		return []cubclient.Row{{"Revision": map[string]any{"RevisionNum": 2.0, "RevisionID": "r2"}}, {"Revision": map[string]any{"RevisionNum": 1.0, "RevisionID": "r1"}}}, nil
 	}

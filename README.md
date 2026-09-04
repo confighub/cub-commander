@@ -7,13 +7,20 @@ in `docs/roadmap.md`.
 
 ## Install
 
-You need [`cub`](https://docs.confighub.com) logged in (`cub auth login`) and Go 1.25+.
+You need [`cub`](https://docs.confighub.com) logged in (`cub auth login`).
+
+```
+cub plugin install confighub/cub-commander
+cub commander
+```
+
+That fetches the latest release binary for your OS and architecture. To build from source
+instead (Go 1.25+):
 
 ```
 git clone https://github.com/confighub/cub-commander
 cd cub-commander
 make plugin        # builds and runs: cub plugin install ./bin/cub-commander
-cub commander
 ```
 
 Everything is read-only against your ConfigHub org. The first screen is the "browse by"

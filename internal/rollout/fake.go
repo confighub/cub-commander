@@ -302,6 +302,10 @@ spec:
 		// dev stage's preview can notice that dev1 lacks the config unit
 		rev("r-cadev-api-1", "u-cadev-api", "ca-dev", "api", 1, "tag-ca-start"),
 		rev("r-cadev-cfg-1", "u-cadev-cfg", "ca-dev", "config", 1, "tag-ca-start"),
+		// the test class base as if promoted: it took the image and kept its 2Gi
+		rev("r-catest-api-1", "u-catest-api", "ca-test", "api", 1, "tag-ca-start"),
+		rev("r-catest-api-2", "u-catest-api", "ca-test", "api", 2, "tag-ca-end"),
+		rev("r-catest-cfg-1", "u-catest-cfg", "ca-test", "config", 1, "tag-ca-start", "tag-ca-end"),
 	}
 	data := func(id, body string) cubclient.Row {
 		return cubclient.Row{"RevisionID": id, "Data": body}
@@ -321,6 +325,8 @@ spec:
 		unit("u-catest-api", "ca-test", "api", "u-ca-api"), unit("u-catest-cfg", "ca-test", "config", "u-ca-cfg"),
 		unit("u-caprod-api", "ca-prod", "api", "u-ca-api"), unit("u-caprod-cfg", "ca-prod", "config", "u-ca-cfg"),
 		unit("u-cadev1-api", "ca-dev1", "api", "u-cadev-api"),
+		unit("u-catest1-api", "ca-test1", "api", "u-catest-api"), unit("u-catest1-cfg", "ca-test1", "config", "u-catest-cfg"),
+		unit("u-catest2-api", "ca-test2", "api", "u-catest-api"), unit("u-catest2-cfg", "ca-test2", "config", "u-catest-cfg"),
 	}
 	unitData := []cubclient.Row{
 		{"UnitID": "u-cadev-api", "SpaceID": "ca-dev", "Data": "image: catalog-api:5.2.0\nmemory: 512Mi\n"},
@@ -330,6 +336,10 @@ spec:
 		{"UnitID": "u-caprod-api", "SpaceID": "ca-prod", "Data": "image: catalog-api:5.2.0\nmemory: 2Gi\n"},
 		{"UnitID": "u-caprod-cfg", "SpaceID": "ca-prod", "Data": "log: warn\n"},
 		{"UnitID": "u-cadev1-api", "SpaceID": "ca-dev1", "Data": "image: catalog-api:5.2.0\nmemory: 512Mi\n"},
+		{"UnitID": "u-catest1-api", "SpaceID": "ca-test1", "Data": "image: catalog-api:5.2.0\nmemory: 2Gi\n"},
+		{"UnitID": "u-catest1-cfg", "SpaceID": "ca-test1", "Data": "log: info\n"},
+		{"UnitID": "u-catest2-api", "SpaceID": "ca-test2", "Data": "image: catalog-api:5.2.0\nmemory: 2Gi\n"},
+		{"UnitID": "u-catest2-cfg", "SpaceID": "ca-test2", "Data": "log: info\n"},
 	}
 	revData := []cubclient.Row{
 		data("r-ctl-2", "image: quay.io/jetstack/cert-manager-controller:v1.16.0\nreplicas: 1\n"),
@@ -338,6 +348,8 @@ spec:
 		data("r-d1-ctl-3", "image: quay.io/jetstack/cert-manager-controller:v1.17.0\nreplicas: 1\n"),
 		data("r-api-2", "image: catalog-api:5.2.0\nmemory: 512Mi\n"),
 		data("r-api-4", "image: catalog-api:5.3.0\nmemory: 1Gi\n"),
+		data("r-catest-api-1", "image: catalog-api:5.2.0\nmemory: 2Gi\n"),
+		data("r-catest-api-2", "image: catalog-api:5.3.0\nmemory: 2Gi\n"),
 	}
 	mem := &MemClient{
 		Rows: map[string][]cubclient.Row{
@@ -354,8 +366,9 @@ spec:
 			"/revision_data":                revData,
 		},
 		Raw: map[string]string{
-			"/space/wf/unit/wf-cm/revision/wfr-cm-2/data": wfDoc("cert-manager"),
-			"/space/wf/unit/wf-ca/revision/wfr-ca-3/data": wfDoc("catalog-api"),
+			"/space/wf/unit/wf-cm/revision/wfr-cm-2/data":       wfDoc("cert-manager"),
+			"/space/wf/unit/wf-ca/revision/wfr-ca-3/data":       wfDoc("catalog-api"),
+			"/space/ca-test/unit/u-catest-api/mutation_sources": `{"MutationSources":[{"Resource":{"ResourceType":"","ResourceName":""},"PathMutationMap":{"memory":{"Protected":true}}}]}`,
 		},
 	}
 	// The dry run: every unit of the space with an upstream, the api unit

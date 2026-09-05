@@ -49,8 +49,9 @@ type rolloutState struct {
 	fromPlan *plan.Plan
 }
 
-// ChangeLoader reads what a change order did in one space (rollout.Change).
-type ChangeLoader func(ctx context.Context, o rollout.Order, spaceID string) ([]rollout.UnitChange, error)
+// ChangeLoader reads what a change order did in one space (rollout.Change,
+// annotated with the ordered change's fields it kept: rollout.WithKept).
+type ChangeLoader func(ctx context.Context, ro *rollout.Rollout, spaceID string) ([]rollout.UnitChange, error)
 
 type rolloutMsg struct {
 	src  string
@@ -146,10 +147,10 @@ func (m *Model) changeFetch() tea.Cmd {
 		return nil
 	}
 	rs.pending[sp.ID] = true
-	loader, o, id := m.changeLoader, rs.ro.Order, sp.ID
+	loader, ro, id := m.changeLoader, rs.ro, sp.ID
 	return func() tea.Msg {
-		ch, err := loader(context.Background(), o, id)
-		return changeMsg{orderID: o.ID, spaceID: id, changes: ch, err: err}
+		ch, err := loader(context.Background(), ro, id)
+		return changeMsg{orderID: ro.Order.ID, spaceID: id, changes: ch, err: err}
 	}
 }
 
@@ -640,11 +641,23 @@ func (m Model) rolloutChangeText(w int) (string, string) {
 	var out []string
 	var untouched []string
 	for _, u := range changes {
-		if !u.Touched {
+		if !u.Touched && len(u.Kept) == 0 {
 			untouched = append(untouched, u.Slug)
 			continue
 		}
 		head := titleStyle.Render(u.Slug) + dimStyle.Render(fmt.Sprintf("  rev %d → %d", u.StartRev, u.EndRev))
+		if !u.Touched {
+			head = titleStyle.Render(u.Slug) + dimStyle.Render("  · nothing changed") + warnStyle.Render(fmt.Sprintf("  · %d kept", len(u.Kept)))
+			out = append(out, head)
+			out = append(out, keptLines(u.Kept, w)...)
+			out = append(out, "")
+			continue
+		}
+		if n := len(u.Kept); n == 1 {
+			head += warnStyle.Render("  · 1 kept")
+		} else if n > 1 {
+			head += warnStyle.Render(fmt.Sprintf("  · %d kept", n))
+		}
 		if u.Err != "" {
 			out = append(out, head, errStyle.Render(u.Err))
 			continue
@@ -664,25 +677,8 @@ func (m Model) rolloutChangeText(w int) (string, string) {
 			head += dimStyle.Render(fmt.Sprintf("  · %d fields", len(u.Fields)))
 		}
 		out = append(out, head)
-		for _, f := range u.Fields {
-			line := "  " + fieldLine(f)
-			if w > 0 && lipgloss.Width(line) > w-2 {
-				// too wide for the pane: path on one line, the values under it
-				p := f.Path
-				if f.Doc != "" {
-					p = dimStyle.Render(f.Doc+" ") + p
-				}
-				out = append(out, "  "+p)
-				if f.Before != "" {
-					out = append(out, "    "+delStyle.Render("- "+f.Before))
-				}
-				if f.After != "" {
-					out = append(out, "    "+addStyle.Render("+ "+f.After))
-				}
-				continue
-			}
-			out = append(out, line)
-		}
+		out = append(out, fieldLines(u.Fields, w)...)
+		out = append(out, keptLines(u.Kept, w)...)
 		out = append(out, "", renderUnified(u.NormBefore, u.NormAfter, labelA, labelB), "")
 	}
 	if len(out) == 0 {

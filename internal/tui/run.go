@@ -42,8 +42,15 @@ func Run(sess plan.Session) error {
 	m.dataSaver = func(ctx context.Context, row cubclient.Row, text, ifMatch string) (int, error) {
 		return exec.SaveUnitData(ctx, client, row, text, ifMatch, editDescription)
 	}
-	m.changeLoader = func(ctx context.Context, o rollout.Order, spaceID string) ([]rollout.UnitChange, error) {
-		return rollout.Change(ctx, client, o, spaceID)
+	m.changeLoader = func(ctx context.Context, ro *rollout.Rollout, spaceID string) ([]rollout.UnitChange, error) {
+		if spaceID == ro.Order.SpaceID {
+			return rollout.OrderedChange(ctx, client, ro)
+		}
+		ch, err := rollout.Change(ctx, client, ro.Order, spaceID)
+		if err != nil {
+			return nil, err
+		}
+		return rollout.WithKept(ctx, client, ro, spaceID, ch), nil
 	}
 	m.previewLoader = func(ctx context.Context, ro *rollout.Rollout, stage int) (*rollout.Preview, error) {
 		return rollout.PreviewStage(ctx, client, ro, stage)

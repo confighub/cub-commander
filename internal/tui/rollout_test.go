@@ -43,8 +43,15 @@ func openRollouts(t *testing.T) (tea.Model, *rollout.MemClient) {
 	mem := rollout.ChapterOne()
 	var m tea.Model = New(planSession(), stubRollouts(t, mem), nil, nil)
 	mm := m.(Model)
-	mm.changeLoader = func(ctx context.Context, o rollout.Order, spaceID string) ([]rollout.UnitChange, error) {
-		return rollout.Change(ctx, mem, o, spaceID)
+	mm.changeLoader = func(ctx context.Context, ro *rollout.Rollout, spaceID string) ([]rollout.UnitChange, error) {
+		if spaceID == ro.Order.SpaceID {
+			return rollout.OrderedChange(ctx, mem, ro)
+		}
+		ch, err := rollout.Change(ctx, mem, ro.Order, spaceID)
+		if err != nil {
+			return nil, err
+		}
+		return rollout.WithKept(ctx, mem, ro, spaceID, ch), nil
 	}
 	mm.previewLoader = func(ctx context.Context, ro *rollout.Rollout, stage int) (*rollout.Preview, error) {
 		return rollout.PreviewStage(ctx, mem, ro, stage)

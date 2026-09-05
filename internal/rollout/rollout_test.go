@@ -307,3 +307,40 @@ func TestPreviewAndPromoteStage(t *testing.T) {
 		t.Errorf("%v", got)
 	}
 }
+
+func TestKeptAgainstTheOrderedChange(t *testing.T) {
+	c := ChapterOne()
+	r := order(t, c, "co-ca")
+	// a test cluster two hops below the base: its class base already kept
+	// 2Gi, so against the class base nothing is kept; against the ordered
+	// change the memory limit is, and the dry run's protection says why
+	p, err := PreviewStage(context.Background(), c, r, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var test1 *SpacePreview
+	for i := range p.Spaces {
+		if p.Spaces[i].Space.Slug == "catalog-api-us-east-test1" {
+			test1 = &p.Spaces[i]
+		}
+	}
+	if test1 == nil || len(test1.Units) == 0 {
+		t.Fatalf("%+v", p)
+	}
+	api := test1.Units[0]
+	if api.Slug != "api" || len(api.Fields) != 1 || len(api.Kept) != 1 || api.Kept[0].Path != "memory" || api.Kept[0].Current != "2Gi" || api.Kept[0].Upstream != "1Gi" || !api.Kept[0].Protected {
+		t.Errorf("test1 api: fields %+v kept %+v", api.Fields, api.Kept)
+	}
+	// the promoted class base's own change reads the same way: image taken, memory kept
+	ch, err := Change(context.Background(), c, r.Order, "ca-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch = WithKept(context.Background(), c, r, "ca-test", ch)
+	if len(ch) != 2 || ch[0].Slug != "api" || len(ch[0].Kept) != 1 || ch[0].Kept[0].Current != "2Gi" || !ch[0].Kept[0].Protected {
+		t.Errorf("class base change: %+v", ch)
+	}
+	if len(ch[1].Kept) != 0 {
+		t.Errorf("config kept: %+v", ch[1].Kept)
+	}
+}

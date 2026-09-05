@@ -115,8 +115,8 @@ func PreviewStage(ctx context.Context, c Writer, r *Rollout, stage int) (*Previe
 	}
 	st := r.Stages[stage]
 	p := &Preview{Stage: st.Name}
-	covered := map[string]map[string]string{}            // upstream space → units carrying the start tag
-	upstreamChange := map[string]map[string]UnitChange{} // upstream space → unit → what the change did there
+	covered := map[string]map[string]string{} // upstream space → units carrying the start tag
+	lin, _ := r.lineage(ctx, c)               // nil only when the ordered change cannot be read; kept is then skipped
 	for _, sp := range st.Spaces {
 		out := SpacePreview{Space: sp}
 		if sp.ID == r.Order.SpaceID {
@@ -146,23 +146,10 @@ func PreviewStage(ctx context.Context, c Writer, r *Rollout, stage int) (*Previe
 		}
 		tracked := map[string]bool{}
 		slugs := map[string]string{}
-		upstreamOf := map[string]string{}
 		for _, row := range units {
 			u := own(row, "Unit")
 			tracked[str(u["UpstreamUnitID"])] = true
 			slugs[str(u["UnitID"])] = str(u["Slug"])
-			upstreamOf[str(u["UnitID"])] = str(u["UpstreamUnitID"])
-		}
-		// what the change did in the upstream: the fields a merge is meant to bring
-		upChanges, ok := upstreamChange[sp.Upstream]
-		if !ok {
-			upChanges = map[string]UnitChange{}
-			if list, err := Change(ctx, c, r.Order, sp.Upstream); err == nil {
-				for _, uc := range list {
-					upChanges[uc.UnitID] = uc
-				}
-			}
-			upstreamChange[sp.Upstream] = upChanges
 		}
 		for id, slug := range baseUnits {
 			if !tracked[id] {
@@ -204,8 +191,11 @@ func PreviewStage(ctx context.Context, c Writer, r *Rollout, stage int) (*Previe
 						up.NoChange = true // layout only
 					}
 				}
-				if uc, ok := upChanges[upstreamOf[up.UnitID]]; ok && uc.Touched {
-					up.Kept = keptFields(uc.Fields, up.Fields, up.Current, protectedPaths(row["MutationSources"]))
+				// kept: the ordered change's fields this merge does not bring
+				if lin != nil {
+					if root, ok := lin.rootChange(ctx, c, r, sp.ID, up.UnitID); ok {
+						up.Kept = keptFields(root.Fields, up.Fields, up.Current, protectedPaths(row["MutationSources"]))
+					}
 				}
 			}
 			out.Units = append(out.Units, up)
@@ -249,17 +239,7 @@ func keptFields(upstream, would []FieldChange, current string, protected map[str
 			continue // the upstream removed it; not a kept value in the sense that matters here
 		}
 		k := KeptField{Doc: f.Doc, Path: f.Path, Current: cur, Upstream: f.After}
-		mp := MutationPath(f.Path)
-		for res, paths := range protected {
-			if res != "" && f.Doc != "" && res != f.Doc {
-				continue
-			}
-			for p := range paths {
-				if mp == p || strings.HasPrefix(mp, p+".") {
-					k.Protected = true
-				}
-			}
-		}
+		k.Protected = isProtected(k, protected)
 		out = append(out, k)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Doc+out[i].Path < out[j].Doc+out[j].Path })

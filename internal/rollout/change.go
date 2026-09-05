@@ -27,6 +27,8 @@ type UnitChange struct {
 	Fields                []FieldChange
 	NormBefore, NormAfter string
 	FormattingOnly        bool
+	// Kept are the ordered change's fields this space did not take (WithKept).
+	Kept []KeptField
 }
 
 // Change reads the tag pair for every unit of one space. Two list calls (the

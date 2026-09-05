@@ -216,6 +216,15 @@ type Rollout struct {
 	// Err is set when the workflow could not be read; Stages then holds only
 	// the source and State says so.
 	Err string
+
+	// lc is shared by copies of the reading (AfterPromote); built lazily by
+	// the kept-field readings.
+	lc *lineageCache
+}
+
+type lineageCache struct {
+	mu  sync.Mutex
+	lin *lineage
 }
 
 // Reached is the last workflow stage the change has reached, the CLI's
@@ -265,7 +274,7 @@ func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*Roll
 		cache = NewCache()
 	}
 	o := ParseOrder(row)
-	r := &Rollout{Order: o, Next: -1}
+	r := &Rollout{Order: o, Next: -1, lc: &lineageCache{}}
 
 	// The base space and the workflow both follow from the order alone;
 	// read them together.

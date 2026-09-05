@@ -230,3 +230,76 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	return res, err
 }
+
+// Send performs a request with a body and returns the status and the raw
+// response. 4xx/5xx come back as an APIError (409 as ConflictError) except
+// 207, which the bulk endpoints use for per-item outcomes and which the
+// caller reads item by item.
+func (c *Client) Send(ctx context.Context, method, path string, q url.Values, contentType, body string) (int, []byte, error) {
+	u := c.base + path
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, strings.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	out, err := io.ReadAll(res.Body)
+	if err != nil {
+		return res.StatusCode, nil, err
+	}
+	if res.StatusCode == http.StatusConflict {
+		var e struct{ Message string }
+		_ = json.Unmarshal(out, &e)
+		return res.StatusCode, out, &ConflictError{Message: strings.TrimSpace(e.Message)}
+	}
+	if res.StatusCode >= 300 && res.StatusCode != http.StatusMultiStatus {
+		var e struct{ Message string }
+		_ = json.Unmarshal(out, &e)
+		msg := strings.TrimSpace(e.Message)
+		if msg == "" {
+			msg = strings.TrimSpace(string(out))
+		}
+		return res.StatusCode, out, &APIError{res.StatusCode, msg}
+	}
+	return res.StatusCode, out, nil
+}
+
+// PatchRows runs a bulk PATCH (merge-patch body) and decodes the per-item
+// responses, whether the status was 200 or 207.
+func (c *Client) PatchRows(ctx context.Context, path string, q url.Values, body string) ([]Row, int, error) {
+	status, out, err := c.Send(ctx, http.MethodPatch, path, q, "application/merge-patch+json", body)
+	if err != nil {
+		return nil, status, err
+	}
+	var rows []Row
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, status, fmt.Errorf("decode %s: %w", path, err)
+	}
+	return rows, status, nil
+}
+
+// PostRow POSTs JSON and decodes one entity.
+func (c *Client) PostRow(ctx context.Context, path string, body string) (Row, error) {
+	_, out, err := c.Send(ctx, http.MethodPost, path, nil, "application/json", body)
+	if err != nil {
+		return nil, err
+	}
+	var row Row
+	if len(out) > 0 {
+		if err := json.Unmarshal(out, &row); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", path, err)
+		}
+	}
+	return row, nil
+}

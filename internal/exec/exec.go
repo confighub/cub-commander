@@ -24,6 +24,15 @@ type Result struct {
 }
 
 func Run(ctx context.Context, c *cubclient.Client, p *plan.Plan) (*Result, error) {
+	rows, err := List(ctx, c, p)
+	if err != nil {
+		return nil, err
+	}
+	return Local(p, rows)
+}
+
+// List runs the plan's server stage and returns the extended rows.
+func List(ctx context.Context, c *cubclient.Client, p *plan.Plan) ([]cubclient.Row, error) {
 	q := url.Values{}
 	if p.List.Where != "" {
 		q.Set("where", p.List.Where)
@@ -42,11 +51,7 @@ func Run(ctx context.Context, c *cubclient.Client, p *plan.Plan) (*Result, error
 		}
 		path = "/space/" + id + "/" + p.Entity.SpacePath
 	}
-	rows, err := c.List(ctx, path, q)
-	if err != nil {
-		return nil, err
-	}
-	return Local(p, rows)
+	return c.List(ctx, path, q)
 }
 
 // Local runs the local stages over extended rows.
@@ -259,6 +264,11 @@ func (ev *evaluator) eval(e lang.Expr, row cubclient.Row) any {
 			return nil
 		}
 		return ok
+	case lang.Call:
+		// A computed column the runner derived onto the row (rollout columns).
+		if m, ok := row["Rollout"].(map[string]any); ok {
+			return m[strings.ToLower(x.Name)]
+		}
 	}
 	return nil
 }

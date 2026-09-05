@@ -16,6 +16,7 @@ import (
 	"github.com/confighub/cub-commander/internal/format"
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
+	"github.com/confighub/cub-commander/internal/rollout"
 	"github.com/confighub/cub-commander/internal/tui"
 )
 
@@ -132,7 +133,27 @@ func runStatements(ctx context.Context, src string) error {
 				fmt.Fprintf(os.Stderr, "%d pairs: %d differ, %d same, %d only-a, %d only-b, %d multi; paired by %s\n", len(d.Pairs), d.Counts["differ"], d.Counts["same"], d.Counts["only-a"], d.Counts["only-b"], d.Counts["multi"], strings.Join(keys, ", "))
 				continue
 			}
-			res, err := exec.Run(ctx, c, p)
+			rows, err := exec.List(ctx, c, p)
+			if err != nil {
+				return err
+			}
+			if p.Rollout != nil {
+				if len(rows) != 1 {
+					return fmt.Errorf("rollout opens one change order; the where steps matched %d", len(rows))
+				}
+				ro, err := rollout.Load(ctx, c, rollout.NewCache(), rows[0])
+				if err != nil {
+					return err
+				}
+				fmt.Print(ro.Text())
+				continue
+			}
+			if p.RolloutCols {
+				if _, err := tui.RolloutRunner(ctx, c, x, p, rows); err != nil {
+					return err
+				}
+			}
+			res, err := exec.Local(p, rows)
 			if err != nil {
 				return err
 			}

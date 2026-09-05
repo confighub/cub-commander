@@ -125,7 +125,7 @@ func (m Model) topBar() string {
 	if scope == "" || scope == "*" {
 		scope = "*"
 	}
-	modeName := map[mode]string{modeResults: "Results", modeDetail: "Detail", modeText: m.textTitle, modeBrowse: "Browse", modeDiff: "Diff"}[m.mode]
+	modeName := map[mode]string{modeResults: "Results", modeDetail: "Detail", modeText: m.textTitle, modeBrowse: "Browse", modeDiff: "Diff", modeRollout: "Rollout"}[m.mode]
 	if m.chooserOpen {
 		modeName = "Browse by"
 	}
@@ -206,6 +206,8 @@ func (m Model) mainView() string {
 		return m.browseView()
 	case modeDiff:
 		return m.diffView()
+	case modeRollout:
+		return m.rolloutView()
 	case modeResults:
 		if m.result == nil {
 			body = dimStyle.Render("no results yet")
@@ -358,6 +360,16 @@ func (m Model) keyBar() string {
 		{"^B", "browse"}, {"^G", "grid"}, {"^O", "open row"}, {"^R", "history"}, {"^X", "explain"}, {"^/", "help"}, {"^Q", "quit"},
 		{"⇧Tab", "focus"}, {"f", "filter"}, {"o", "order"}, {"s/t/u/d/r/l", "pivot"},
 	}
+	if m.mode == modeRollout && !m.chooserOpen {
+		updown := "space"
+		if m.roll != nil && m.roll.pane == 1 {
+			updown = "scroll diff"
+		}
+		keys = []struct{ k, label string }{
+			{"←→", "stage"}, {"↑↓", updown}, {"Tab", "pane"}, {"P/L/B", "promote/release/both"}, {"⏎", "full diff"}, {"w", "raw"}, {"s", "units"}, {"i", "order"},
+			{"R", "refresh"}, {"^X", "cub"}, {"Esc", "list"}, {"^/", "help"}, {"^Q", "quit"},
+		}
+	}
 	var parts []string
 	for _, k := range keys {
 		parts = append(parts, keyStyle.Render(k.k)+" "+k.label)
@@ -416,6 +428,19 @@ d lists the unit's revisions: ⏎ diffs the highlighted one against the current
 data, m marks one and ⏎ on another diffs the two; Esc returns to the list, Esc again closes
 it. The pivot keys
 work here too: u on a space lists its units, s on a unit shows its space's units, r revisions.
+
+Rollouts: the chooser's "Rollouts in flight" lists the change orders still moving, with state(),
+stage(), next() and blocker() derived from each one's ChangeWorkflow the way cub changeorder list
+derives them. Enter on a ChangeOrder row opens it as a rollout (ChangeOrder | … | rollout): the
+stage strip with taken/released/healthy per stage, the selected stage's spaces, the gates on the
+next hop in the CLI's words, and the change itself on the right, per unit, between the revisions
+the order's start and end tags mark. A stage that has not taken it shows the server's dry run
+of the promotion instead: the fields each unit would change, against its current data. ←→ stage,
+↑↓ space (Tab, then ↑↓ scrolls the diff). P promotes the next stage, L publishes a release of
+each space in the stage that has taken the change (pinned to the change order's end tag, after
+the triggers gate clears), B does both; each shows what it will run, in cub terms, and waits for
+y. ⏎ full diff, w raw text, s the space's units, i the change order's fields, R refresh, ^X the
+cub commands, Esc back to the list.
 
 Keys on a results row
   Enter  detail            f  add "where <column> = <value>" for the focused cell (←→ move)

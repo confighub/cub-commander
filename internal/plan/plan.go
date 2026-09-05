@@ -24,10 +24,27 @@ type Plan struct {
 	List    *ListStage
 	Local   []LocalStage
 	Columns []Col
-	Pushed  []bool     // per statement filter: true when it went to the server
-	Browse  []lang.Ref // browse axes, when the statement has a browse by step
-	Diff    *DiffPlan  // when the statement has a diff step
+	Pushed  []bool       // per statement filter: true when it went to the server
+	Browse  []lang.Ref   // browse axes, when the statement has a browse by step
+	Diff    *DiffPlan    // when the statement has a diff step
+	Rollout *RolloutPlan // when the statement has a rollout step
+	// RolloutCols is set when the columns include state(), stage(), next()
+	// or blocker(): the runner derives them per ChangeOrder row from its
+	// ChangeWorkflow before the local stages run.
+	RolloutCols bool
 }
+
+// RolloutPlan is the rollout step: the list must yield one ChangeOrder.
+type RolloutPlan struct {
+	Stage string
+}
+
+// RolloutColumns are the computed columns a ChangeOrder statement may name.
+var RolloutColumns = map[string]bool{"state": true, "stage": true, "next": true, "blocker": true}
+
+// rolloutFields are the ChangeOrder attributes the derivation reads.
+var rolloutFields = []string{"Slug", "SpaceID", "Space.Slug", "Description", "State", "AbortedReason", "CreatedAt",
+	"StartTagID", "EndTagID", "InScopeSpaceIDs", "ResolvedSpaceIDs", "ReleasedSpaceIDs", "Annotations", "SkippedUnits"}
 
 // DiffPlan is two list stages sharing the common where, one per side.
 type DiffPlan struct {
@@ -107,10 +124,15 @@ func Compile(st *lang.SelectStmt, s Session) (*Plan, error) {
 	} else {
 		for _, c := range st.Columns {
 			if call, ok := c.Expr.(lang.Call); ok {
-				if !isAggregate(call.Name) {
+				switch {
+				case RolloutColumns[strings.ToLower(call.Name)] && len(call.Args) == 0:
+					if ent.Name != "ChangeOrder" {
+						return nil, fmt.Errorf("%s() is a rollout column; it needs a ChangeOrder statement", call.Name)
+					}
+					p.RolloutCols = true
+				case !isAggregate(call.Name):
 					return nil, fmt.Errorf("function column %s(): function columns arrive in M6", call.Name)
-				}
-				if len(st.GroupBy) == 0 {
+				case len(st.GroupBy) == 0:
 					return nil, fmt.Errorf("%s() needs a GROUP BY", call.Name)
 				}
 			}
@@ -179,6 +201,17 @@ func Compile(st *lang.SelectStmt, s Session) (*Plan, error) {
 	if st.Diff != nil {
 		refs = append(refs, lang.Ref{Path: "DataHash"}, lang.Ref{Path: "Labels"}, lang.Ref{Path: "SpaceID"}, lang.Ref{Path: "Space.Slug"}, lang.Ref{Path: "Space.Labels"})
 		refs = append(refs, st.Diff.By...)
+	}
+	if st.Rollout != nil {
+		if ent.Name != "ChangeOrder" {
+			return nil, fmt.Errorf("rollout opens a ChangeOrder; start from ChangeOrder")
+		}
+		p.Rollout = &RolloutPlan{Stage: st.Rollout.Stage}
+	}
+	if p.Rollout != nil || p.RolloutCols {
+		for _, f := range rolloutFields {
+			refs = append(refs, lang.Ref{Path: f})
+		}
 	}
 	for _, b := range st.Browse {
 		if _, isEntity := catalog.Lookup(b.Path); isEntity && !strings.Contains(b.Path, ".") {
@@ -259,6 +292,10 @@ func Compile(st *lang.SelectStmt, s Session) (*Plan, error) {
 		p.Diff = &DiffPlan{A: mk(st.Diff.A), B: mk(st.Diff.B), AExpr: st.Diff.A, BExpr: st.Diff.B, By: st.Diff.By, Common: p.List.Where}
 	}
 
+	if p.RolloutCols {
+		p.Local = append(p.Local, LocalStage{Kind: "rollout", Detail: "state(), stage(), next(), blocker()",
+			Reason: "the server stores no stage; each is read from the ChangeOrder's ChangeWorkflow revision, its stage selectors and the spaces' live status, as cub changeorder list does"})
+	}
 	for i, f := range localFilters {
 		p.Local = append(p.Local, LocalStage{Kind: "where", Expr: f, Detail: lang.ExprString(f), Reason: localReasons[i]})
 	}
@@ -536,12 +573,20 @@ func (p *Plan) Explain(spaceID string) string {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "plan\n  1. list %s\n     %s\n     %s\n", p.Entity.Name, p.CubCommand(), p.APIPath(spaceID))
-	for i, l := range p.Local {
-		fmt.Fprintf(&b, "  %d. %s %s\n     local", i+2, l.Kind, l.Detail)
+	n := 2
+	for _, l := range p.Local {
+		fmt.Fprintf(&b, "  %d. %s %s\n     local", n, l.Kind, l.Detail)
 		if l.Reason != "" {
 			fmt.Fprintf(&b, "   (%s)", l.Reason)
 		}
 		b.WriteString("\n")
+		n++
+	}
+	if p.Rollout != nil {
+		fmt.Fprintf(&b, "  %d. read the ChangeWorkflow revision the change order pins\n     GET /api/unit?where=UnitID = '…'   then   cub unit data <workflow> --revision <n>\n", n)
+		fmt.Fprintf(&b, "  %d. resolve each stage's spaces\n     cub space list --where \"<stage.whereSpace> AND Labels.Component = '<component>'\"   filtered to InScopeSpaceIDs\n", n+1)
+		fmt.Fprintf(&b, "  %d. derive taken/released from ResolvedSpaceIDs/ReleasedSpaceIDs, healthy from the space's live-status annotation; next stage and gates as cub variant promote checks them\n     local\n", n+2)
+		fmt.Fprintf(&b, "  %d. the change per space: revisions carrying the start and end tags\n     cub revision list --space '*' --where \"SpaceID = '…' AND Tags ? '<tag>'\"   (twice: the where language has no OR)   then   GET /api/revision_data?where=RevisionID IN (…)\n", n+3)
 	}
 	return b.String()
 }

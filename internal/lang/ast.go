@@ -21,8 +21,16 @@ type SelectStmt struct {
 	GroupBy    []Ref
 	OrderBy    []OrderItem
 	Limit      *int
-	Browse     []Ref     // browse by axes; the TUI renders Finder columns over them
-	Diff       *DiffStep // diff A vs B [by …]: compare like units across two selections
+	Browse     []Ref        // browse by axes; the TUI renders Finder columns over them
+	Diff       *DiffStep    // diff A vs B [by …]: compare like units across two selections
+	Rollout    *RolloutStep // rollout [stage <name>]: open one ChangeOrder as a rollout
+}
+
+// RolloutStep opens the one ChangeOrder the statement selects as a rollout:
+// its ChangeWorkflow's stages, where the change has got to, the gates on the
+// next hop. Stage preselects a stage in the view.
+type RolloutStep struct {
+	Stage string
 }
 
 // DiffStep compares the units matching A with those matching B, paired by By

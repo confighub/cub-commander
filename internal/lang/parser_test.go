@@ -127,3 +127,33 @@ func TestLexerErrors(t *testing.T) {
 		t.Error("want error on backslash inside string")
 	}
 }
+
+func TestRolloutStepRoundTrip(t *testing.T) {
+	src := "ChangeOrder | in * | where State IN ('New', 'InProgress', 'Resolved') | columns Slug, Space.Slug, state(), stage(), next(), blocker(), CreatedAt | order by CreatedAt desc"
+	st, err := ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := st.(*SelectStmt)
+	if len(sel.Columns) != 7 {
+		t.Fatalf("columns: %d", len(sel.Columns))
+	}
+	if c, ok := sel.Columns[2].Expr.(Call); !ok || c.Name != "state" || len(c.Args) != 0 {
+		t.Errorf("state() parsed as %#v", sel.Columns[2].Expr)
+	}
+	if got := StmtString(sel); !strings.Contains(got, "state(), stage(), next(), blocker()") {
+		t.Errorf("printed: %s", got)
+	}
+	st, err = ParseOne("ChangeOrder | in * | where ChangeOrderID = 'x' | rollout stage test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel = st.(*SelectStmt)
+	if sel.Rollout == nil || sel.Rollout.Stage != "test" {
+		t.Fatalf("rollout step: %+v", sel.Rollout)
+	}
+	again, err := ParseOne(StmtString(sel))
+	if err != nil || again.(*SelectStmt).Rollout == nil || again.(*SelectStmt).Rollout.Stage != "test" {
+		t.Errorf("round trip: %v %s", err, StmtString(sel))
+	}
+}

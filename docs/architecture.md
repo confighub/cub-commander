@@ -14,6 +14,7 @@ not written anywhere else. Read this before adding a mode.*
 | `internal/exec` | Runs plans: generic REST rows (`cubclient.Row` = `map[string]any` keyed by entity name, joins as sibling keys), local where/group/order/limit, `Labels.*` expansion (`expandColumns`), diff pairing (`PairRows`, `refine`), unified diff, unit data read/write (`UnitDataWithHash`, `SaveUnitData`), YAML stream splitting (`docs.go`). |
 | `internal/cubclient` | Thin HTTP client: `List`, `GetRaw`, `GetRawETag`, `PutRaw` (If-Match, 409 → `ConflictError`), `SpaceID` cache, retrying transport. |
 | `internal/history` | jsonl statement history under `~/.confighub/commander/`. |
+| `internal/rollout` | A ChangeOrder read as a rollout: the pinned ChangeWorkflow revision, each stage's spaces (selector + component, filtered to `InScopeSpaceIDs`), taken/released from the server's per-space sets, healthy from the live-status annotation, the next stage and its gates in the CLI's words (`derive`), and the change per space from the order's start/end tags (`Change`). `MemClient` + `ChapterOne()` are the offline fixture other packages' tests use. See `rollouts.md`. |
 | `internal/tui` | The Bubble Tea v2 app. See below. |
 | `cmd` | cobra root: `commander` opens the TUI; hidden `-e` runs statements for scripts and tests. |
 
@@ -25,11 +26,13 @@ Modules are `charm.land/bubbletea/v2`, `charm.land/bubbles/v2`, `charm.land/lipg
 One `Model` (`app.go`) with:
 
 - **Modes**: `modeResults` (grid), `modeDetail` (tabbed row), `modeText` (viewport: help,
-  EXPLAIN, revision diffs), `modeBrowse` (Finder panes), `modeDiff` (pairs + unified diff).
+  EXPLAIN, revision diffs), `modeBrowse` (Finder panes), `modeDiff` (pairs + unified diff),
+  `modeRollout` (stage strip + spaces + change; `rollout.go`, entered by a `rollout` step).
   The chooser (`chooserOpen`) and help (`helpOpen`) are overlays, not modes.
 - **Focus**: `focusCmd` (the textarea), `focusMain`, `focusDrawer` (history).
 - **Per-mode state**: `browse *browseState`, `det *detailState` (with `picker *revPicker`),
-  `diff *diffState`. Each mode file owns its state, its `…Key` handler and its `…View`:
+  `diff *diffState`, `roll *rolloutState` (remembers the statement it was opened from and
+  restores it on Esc). Each mode file owns its state, its `…Key` handler and its `…View`:
   `browse.go`, `detail.go` + `revisions.go`, `diff.go`, `actions.go` (grid, chips, pivots).
 - **Key routing order** (`key()` in `app.go`), which is where most "key does nothing" bugs
   have lived: completion popup → open revision picker → global chords (`^Q ^/ ^G ^O ^R ^X ^B`,
@@ -50,10 +53,14 @@ One `Model` (`app.go`) with:
   `m.running` replaces the main area until the result lands.
 - **Marks** are a two-slot set toggled with `m` (browse selections for diffs, revisions in the
   picker). `d` runs the diff. Keep `m`/`d` meaning that everywhere.
-- **Writes**: exactly one, `SaveUnitData`, always with `If-Match`; a resource edit is the
-  unit rewritten with one document replaced (`exec.Stream.Replace`). An empty hash refuses to
-  write. Anything new that writes should go through the same shape: read with ETag, edit,
-  conditional PUT, 409 → reload and keep the draft.
+- **Writes**: `SaveUnitData`, always with `If-Match`; a resource edit is the unit rewritten
+  with one document replaced (`exec.Stream.Replace`). An empty hash refuses to write. And the
+  rollout promote (`rollout.PromoteStage`): a bulk `PATCH /unit … upgrade=true&change_order=…`
+  per space, offered only after a fresh reading says the gates are open and a dry run of the
+  same request (`PreviewStage`) has no blockers, behind a `y` confirm overlay
+  (`rolloutState.confirm`, routed before the global chords like the popup and picker); the
+  server is idempotent per unit, so re-running is safe. The reading is re-executed afterwards
+  and the report shown once it lands. Anything new that writes follows one of these two shapes.
 
 ## Conventions worth keeping
 
@@ -79,6 +86,10 @@ One `Model` (`app.go`) with:
   drive `e`. The plugin binary takes `CUB_SERVER`/`CUB_TOKEN`/`CUB_CONTEXT` from the
   environment, so it can be pointed at another context without switching `cub context`.
 - Never write to the production org for a test; the demo context is for that.
+- The org-wide `/revision` and `/revision_data` endpoints return **one row per unit** unless
+  `distinct_on=Off` is passed, and Off demands an explicit `limit`. A before/after pair of
+  one unit is two rows of one unit; `rollout.RevisionData` passes Off. The space-scoped
+  `/space/{s}/unit/{u}/revision` list is not affected.
 
 ## Loop
 

@@ -65,6 +65,12 @@ func StmtString(s *SelectStmt) string {
 			b.WriteString(" by " + strings.Join(parts, ", "))
 		}
 	}
+	if s.Rollout != nil {
+		b.WriteString("\n| rollout")
+		if s.Rollout.Stage != "" {
+			b.WriteString(" stage " + s.Rollout.Stage)
+		}
+	}
 	if len(s.GroupBy) > 0 {
 		parts := make([]string, len(s.GroupBy))
 		for i, g := range s.GroupBy {

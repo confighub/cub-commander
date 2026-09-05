@@ -13,6 +13,7 @@ import (
 	"github.com/confighub/cub-commander/internal/history"
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
+	"github.com/confighub/cub-commander/internal/rollout"
 )
 
 // Run opens the application against the ConfigHub server cub pointed us at.
@@ -41,6 +42,18 @@ func Run(sess plan.Session) error {
 	m.dataSaver = func(ctx context.Context, row cubclient.Row, text, ifMatch string) (int, error) {
 		return exec.SaveUnitData(ctx, client, row, text, ifMatch, editDescription)
 	}
+	m.changeLoader = func(ctx context.Context, o rollout.Order, spaceID string) ([]rollout.UnitChange, error) {
+		return rollout.Change(ctx, client, o, spaceID)
+	}
+	m.previewLoader = func(ctx context.Context, ro *rollout.Rollout, stage int) (*rollout.Preview, error) {
+		return rollout.PreviewStage(ctx, client, ro, stage)
+	}
+	m.promoter = func(ctx context.Context, ro *rollout.Rollout, stage int) ([]rollout.Outcome, error) {
+		return rollout.PromoteStage(ctx, client, ro, stage)
+	}
+	m.releaser = func(ctx context.Context, ro *rollout.Rollout, stage int, promoted []rollout.Outcome) ([]rollout.ReleaseOutcome, error) {
+		return rollout.ReleaseStage(ctx, client, rollout.AfterPromote(ro, promoted), stage)
+	}
 	_ = live
 	_, err = tea.NewProgram(m).Run()
 	return err
@@ -62,7 +75,17 @@ func DefaultRunner(c *cubclient.Client, live *catalog.Live) Runner {
 				}
 				return diffMsg{stmt: x, plan: p, res: res}, nil
 			}
-			res, err := exec.Run(ctx, c, p)
+			rows, err := exec.List(ctx, c, p)
+			if err != nil {
+				return nil, err
+			}
+			if p.Rollout != nil || p.RolloutCols {
+				msg, err := RolloutRunner(ctx, c, x, p, rows)
+				if err != nil || msg != nil {
+					return msg, err
+				}
+			}
+			res, err := exec.Local(p, rows)
 			if err != nil {
 				return nil, err
 			}

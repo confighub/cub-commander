@@ -166,3 +166,40 @@ func TestDiffLiftsToUnit(t *testing.T) {
 		t.Errorf("resource-own attribute should be rejected")
 	}
 }
+
+func TestRolloutPlan(t *testing.T) {
+	st, err := lang.ParseOne("ChangeOrder | in * | where State IN ('New', 'InProgress') | columns Slug, state(), blocker()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Compile(st.(*lang.SelectStmt), Session{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.RolloutCols || len(p.Local) != 1 || p.Local[0].Kind != "rollout" {
+		t.Errorf("rollout columns not planned: %+v", p.Local)
+	}
+	sel := strings.Join(p.List.Select, ",")
+	for _, f := range []string{"Annotations", "ResolvedSpaceIDs", "ReleasedSpaceIDs", "StartTagID", "EndTagID", "InScopeSpaceIDs", "Space.Slug"} {
+		if !strings.Contains(sel, f) {
+			t.Errorf("select lacks %s: %s", f, sel)
+		}
+	}
+	if !strings.Contains(p.Explain(""), "rollout state(), stage(), next(), blocker()") {
+		t.Errorf("explain: %s", p.Explain(""))
+	}
+	st, _ = lang.ParseOne("ChangeOrder | in * | where ChangeOrderID = 'x' | rollout")
+	p, err = Compile(st.(*lang.SelectStmt), Session{})
+	if err != nil || p.Rollout == nil {
+		t.Fatalf("rollout step: %v", err)
+	}
+	if !strings.Contains(p.Explain(""), "cub variant promote") && !strings.Contains(p.Explain(""), "Tags ?") {
+		t.Errorf("explain: %s", p.Explain(""))
+	}
+	if _, err := Compile(mustSel("Unit | in * | columns Slug, state()"), Session{}); err == nil {
+		t.Error("state() accepted on Unit")
+	}
+	if _, err := Compile(mustSel("Unit | in * | rollout"), Session{}); err == nil {
+		t.Error("rollout accepted on Unit")
+	}
+}

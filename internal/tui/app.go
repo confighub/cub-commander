@@ -23,6 +23,7 @@ import (
 	"github.com/confighub/cub-commander/internal/history"
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
+	"github.com/confighub/cub-commander/internal/rollout"
 )
 
 type mode int
@@ -33,6 +34,7 @@ const (
 	modeText
 	modeBrowse
 	modeDiff
+	modeRollout
 )
 
 type focus int
@@ -94,6 +96,13 @@ type Model struct {
 	revLoader     RevLoader
 	revDataLoader RevDataLoader
 	textFrom      mode
+
+	// rollout
+	roll          *rolloutState
+	changeLoader  ChangeLoader
+	previewLoader PreviewLoader
+	promoter      Promoter
+	releaser      Releaser
 
 	// diff
 	diff        *diffState
@@ -229,6 +238,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.afterEdit(msg)
 	case savedMsg:
 		return m, m.afterSave(msg)
+	case rolloutMsg:
+		return m, m.rolloutLoaded(msg)
+	case changeMsg:
+		m.changeLoaded(msg)
+		return m, nil
+	case previewMsg:
+		m.previewLoaded(msg)
+		return m, nil
+	case actionMsg:
+		return m.actionDone(msg)
 	case diffMsg:
 		m.running = false
 		m.stmt, m.plan = msg.stmt, msg.plan
@@ -264,6 +283,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chooserOpen = false
 		m.mode = modeResults
 		m.fillTable()
+		// The table only handles keys while focused. A statement run from the
+		// chooser or a rewrite lands with focus already on the main area, so
+		// focus the table here rather than only in toggleFocus.
+		if m.focus == focusMain {
+			m.tbl.Focus()
+		} else {
+			m.tbl.Blur()
+		}
 		if len(msg.plan.Browse) > 0 && msg.res.Raw != nil {
 			m.startBrowse(msg.plan.Browse, msg.res.Raw)
 			return m, m.resourceFetch(m.browse.panes())
@@ -341,6 +368,10 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeDetail && m.focus == focusMain && m.det != nil && m.det.picker != nil {
 		return m.pickerKey(k)
 	}
+	// And a write waiting for confirmation: y runs it, anything else cancels.
+	if m.mode == modeRollout && m.roll != nil && m.roll.confirm != nil {
+		return m.confirmKey(k)
+	}
 	// Global.
 	// No F-keys: they are awkward on a Mac. Everything global is a control chord
 	// the editor does not use (ctrl+a/e/f/b/k/u/w/d/n/p/t/v are readline).
@@ -370,7 +401,11 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+x":
 		if m.plan != nil {
-			m.showText("EXPLAIN", m.plan.Explain("")+"\n"+m.plan.CubCommand())
+			body := m.plan.Explain("") + "\n" + m.plan.CubCommand()
+			if m.mode == modeRollout && m.roll != nil {
+				body += "\n" + strings.Join(m.roll.ro.CubCommands(), "\n")
+			}
+			m.showText("EXPLAIN", body)
 			m.focus = focusMain
 		}
 		return m, nil
@@ -384,7 +419,7 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case m.chooserOpen && (m.result != nil || m.browse != nil):
 			m.chooserOpen = false
 		case m.mode == modeDetail:
-			if m.det != nil && (m.det.from == modeBrowse || m.det.from == modeDiff || m.det.from == modeResults) {
+			if m.det != nil && (m.det.from == modeBrowse || m.det.from == modeDiff || m.det.from == modeResults || m.det.from == modeRollout && m.roll != nil) {
 				m.mode = m.det.from
 			} else if m.result != nil {
 				m.mode = modeResults
@@ -393,8 +428,10 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		case m.mode == modeText && m.textFrom == modeDetail && m.det != nil:
 			m.mode = modeDetail
-		case m.mode == modeText && (m.textFrom == modeBrowse && m.browse != nil || m.textFrom == modeDiff && m.diff != nil):
+		case m.mode == modeText && (m.textFrom == modeBrowse && m.browse != nil || m.textFrom == modeDiff && m.diff != nil || m.textFrom == modeRollout && m.roll != nil):
 			m.mode = m.textFrom
+		case m.mode == modeRollout:
+			m.rolloutBack()
 		case m.mode == modeText && m.result != nil:
 			m.mode = modeResults
 		case m.mode == modeDiff:
@@ -418,6 +455,9 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.focus == focusMain && m.mode == modeDetail && !m.drawerOpen {
 			return m.detailKey(k) // Tab switches detail tabs; ⇧Tab still moves focus
 		}
+		if m.focus == focusMain && m.mode == modeRollout && !m.drawerOpen && !m.chooserOpen {
+			return m.rolloutKey(k) // Tab switches panes; ⇧Tab still moves focus
+		}
 		if m.focus != focusCmd || m.drawerOpen {
 			m.toggleFocus()
 			return m, nil
@@ -439,6 +479,9 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeDiff {
 			return m.diffKey(k)
+		}
+		if m.mode == modeRollout {
+			return m.rolloutKey(k)
 		}
 		if m.mode == modeDetail {
 			return m.detailKey(k)
@@ -662,6 +705,9 @@ func (m Model) mainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter":
+		if m.plan != nil && m.plan.Entity.Name == "ChangeOrder" {
+			return m.openRollout()
+		}
 		m.openDetail()
 		return m, nil
 	case "f", "=":
@@ -681,6 +727,26 @@ func (m Model) mainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.tbl, cmd = m.tbl.Update(k)
 	return m, cmd
+}
+
+// openRollout rewrites the statement to open the selected ChangeOrder row
+// as a rollout; ^O still opens the plain detail.
+func (m Model) openRollout() (tea.Model, tea.Cmd) {
+	if m.result == nil || m.result.Raw == nil {
+		return m, nil
+	}
+	i := m.tbl.Cursor()
+	if i < 0 || i >= len(m.result.Raw) {
+		return m, nil
+	}
+	o := rollout.ParseOrder(m.result.Raw[i])
+	if o.ID == "" {
+		m.setStatus("this row carries no ChangeOrderID; select it to open the rollout", true)
+		return m, nil
+	}
+	return m.rewrite(&lang.SelectStmt{Star: true, From: lang.Source{Entity: "ChangeOrder"}, Scope: &lang.Scope{Org: true},
+		Filters: []lang.Filter{{Expr: lang.Cmp{Left: lang.Ref{Path: "ChangeOrderID"}, Op: "=", Right: lang.Lit{Kind: lang.LitString, S: o.ID}}}},
+		Rollout: &lang.RolloutStep{}})
 }
 
 func (m *Model) openDetail() {
@@ -800,6 +866,9 @@ func (m Model) execute(src string) (tea.Model, tea.Cmd) {
 		}
 		switch x := last.(type) {
 		case resultMsg:
+			x.src = src
+			return x
+		case rolloutMsg:
 			x.src = src
 			return x
 		case textMsg:

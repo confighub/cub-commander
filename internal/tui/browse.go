@@ -714,6 +714,7 @@ func (m *Model) presets() []chooserItem {
 		})
 	}
 	items = append(items, chooserItem{label: "Target   by Target → Units", stmt: "Unit | in * | where TargetID IS NOT NULL | browse by Target.Slug"})
+	items = append(items, chooserItem{label: "Rollouts in flight (change orders still moving; ⏎ on one opens it)", stmt: RolloutsPreset})
 	items = append(items,
 		chooserItem{label: "Unit     raw list (default columns)", stmt: "Unit | in * | limit 500"},
 		chooserItem{label: "Space    raw list", stmt: "Space"},

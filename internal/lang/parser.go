@@ -257,6 +257,16 @@ func (p *parser) pipelineStmt() (Stmt, error) {
 				}
 			}
 			st.Diff = d
+		case t.Is("rollout"):
+			p.next()
+			st.Rollout = &RolloutStep{}
+			if p.accept("stage") {
+				name, err := p.ident()
+				if err != nil {
+					return nil, err
+				}
+				st.Rollout.Stage = name
+			}
 		case t.Is("group"), t.Is("order"), t.Is("limit"):
 			if err := p.tail(st); err != nil {
 				return nil, err

@@ -253,6 +253,22 @@ func TestPreviewAndPromoteStage(t *testing.T) {
 	if len(test.Units[0].Fields) != 1 || test.Units[0].Fields[0].Path != "image" {
 		t.Errorf("test api fields (2Gi should be kept): %+v", test.Units[0].Fields)
 	}
+	// the upstream raised memory to 1Gi; test keeps 2Gi, and a protection says why
+	if k := test.Units[0].Kept; len(k) != 1 || k[0].Path != "memory" || k[0].Current != "2Gi" || k[0].Upstream != "1Gi" || !k[0].Protected {
+		t.Errorf("test api kept: %+v", k)
+	}
+	if len(dev.Units[0].Kept) != 0 {
+		t.Errorf("dev api kept: %+v", dev.Units[0].Kept)
+	}
+	if q := c.Patches[0]; q.Get("include") != "ConfigData,MutationSources" {
+		t.Errorf("dry run include: %s", q.Get("include"))
+	}
+	if got := MutationPath("spec.template.spec.containers[name=api].resources.limits.memory"); got != "spec.template.spec.containers.?name=api.resources.limits.memory" {
+		t.Errorf("MutationPath: %s", got)
+	}
+	if got := MutationPath("spec.ports[0].port"); got != "spec.ports.0.port" {
+		t.Errorf("MutationPath: %s", got)
+	}
 	if len(p.Blockers()) != 0 {
 		t.Errorf("blockers: %v", p.Blockers())
 	}
@@ -262,7 +278,7 @@ func TestPreviewAndPromoteStage(t *testing.T) {
 	}
 	// the dry run is the CLI's request
 	q := c.Patches[0]
-	if q.Get("upgrade") != "true" || q.Get("dry_run") != "true" || q.Get("change_order") != "co-ca" || q.Get("include") != "ConfigData" || !strings.Contains(q.Get("where"), "UpstreamUnitID IS NOT NULL") {
+	if q.Get("upgrade") != "true" || q.Get("dry_run") != "true" || q.Get("change_order") != "co-ca" || !strings.Contains(q.Get("where"), "UpstreamUnitID IS NOT NULL") {
 		t.Errorf("dry run query: %v", q)
 	}
 	// dev stage: dev1 lacks config → a blocker names it

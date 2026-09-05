@@ -380,7 +380,12 @@ spec:
 				if str(u["Slug"]) == "api" {
 					mem := "1Gi"
 					if strings.Contains(cur, "2Gi") {
+						// test and prod protect the limit; the merge keeps it and says so
 						mem = "2Gi"
+						resp["MutationSources"] = []any{map[string]any{
+							"Resource":        map[string]any{"ResourceType": "", "ResourceName": ""},
+							"PathMutationMap": map[string]any{"memory": map[string]any{"Protected": true}},
+						}}
 					}
 					resp["ConfigData"] = "image: catalog-api:5.3.0\nmemory: " + mem + "\n"
 				} else {

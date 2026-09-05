@@ -27,6 +27,19 @@ type UnitPreview struct {
 	NormAfter    string
 	NoChange     bool
 	Err          string
+	// Kept are the fields the upstream's change touched that this merge
+	// leaves alone: the space's value stays. Protected says a recorded
+	// protection on the path is why; otherwise the merge treated the value
+	// as a local override.
+	Kept []KeptField
+}
+
+// KeptField is an upstream change the merge does not bring.
+type KeptField struct {
+	Doc, Path string
+	Current   string // what the space keeps
+	Upstream  string // what the upstream changed it to
+	Protected bool
 }
 
 // SpacePreview is one target space of a stage.
@@ -86,7 +99,7 @@ func promoteQuery(o Order, spaceID string, dryRun bool) url.Values {
 	}
 	if dryRun {
 		q.Set("dry_run", "true")
-		q.Set("include", "ConfigData")
+		q.Set("include", "ConfigData,MutationSources")
 	}
 	return q
 }
@@ -102,7 +115,8 @@ func PreviewStage(ctx context.Context, c Writer, r *Rollout, stage int) (*Previe
 	}
 	st := r.Stages[stage]
 	p := &Preview{Stage: st.Name}
-	covered := map[string]map[string]string{} // upstream space → units carrying the start tag
+	covered := map[string]map[string]string{}            // upstream space → units carrying the start tag
+	upstreamChange := map[string]map[string]UnitChange{} // upstream space → unit → what the change did there
 	for _, sp := range st.Spaces {
 		out := SpacePreview{Space: sp}
 		if sp.ID == r.Order.SpaceID {
@@ -132,10 +146,23 @@ func PreviewStage(ctx context.Context, c Writer, r *Rollout, stage int) (*Previe
 		}
 		tracked := map[string]bool{}
 		slugs := map[string]string{}
+		upstreamOf := map[string]string{}
 		for _, row := range units {
 			u := own(row, "Unit")
 			tracked[str(u["UpstreamUnitID"])] = true
 			slugs[str(u["UnitID"])] = str(u["Slug"])
+			upstreamOf[str(u["UnitID"])] = str(u["UpstreamUnitID"])
+		}
+		// what the change did in the upstream: the fields a merge is meant to bring
+		upChanges, ok := upstreamChange[sp.Upstream]
+		if !ok {
+			upChanges = map[string]UnitChange{}
+			if list, err := Change(ctx, c, r.Order, sp.Upstream); err == nil {
+				for _, uc := range list {
+					upChanges[uc.UnitID] = uc
+				}
+			}
+			upstreamChange[sp.Upstream] = upChanges
 		}
 		for id, slug := range baseUnits {
 			if !tracked[id] {
@@ -177,11 +204,14 @@ func PreviewStage(ctx context.Context, c Writer, r *Rollout, stage int) (*Previe
 						up.NoChange = true // layout only
 					}
 				}
+				if uc, ok := upChanges[upstreamOf[up.UnitID]]; ok && uc.Touched {
+					up.Kept = keptFields(uc.Fields, up.Fields, up.Current, protectedPaths(row["MutationSources"]))
+				}
 			}
 			out.Units = append(out.Units, up)
 		}
 		sort.Slice(out.Units, func(i, j int) bool {
-			ci, cj := !out.Units[i].NoChange, !out.Units[j].NoChange
+			ci, cj := !out.Units[i].NoChange || len(out.Units[i].Kept) > 0, !out.Units[j].NoChange || len(out.Units[j].Kept) > 0
 			if ci != cj {
 				return ci
 			}
@@ -190,6 +220,85 @@ func PreviewStage(ctx context.Context, c Writer, r *Rollout, stage int) (*Previe
 		p.Spaces = append(p.Spaces, out)
 	}
 	return p, nil
+}
+
+// keptFields are the upstream's field changes the merge does not carry into
+// this unit: not among the fields the dry run changes, and the current value
+// is not already the upstream's. Protection is looked up by resource and
+// resolved path in the unit's MutationSources; a path whose ancestor is
+// protected counts too.
+func keptFields(upstream, would []FieldChange, current string, protected map[string]map[string]bool) []KeptField {
+	if len(upstream) == 0 {
+		return nil
+	}
+	changing := map[string]bool{}
+	for _, f := range would {
+		changing[f.Doc+"|"+f.Path] = true
+	}
+	values, _ := Values(current)
+	var out []KeptField
+	for _, f := range upstream {
+		if changing[f.Doc+"|"+f.Path] {
+			continue
+		}
+		cur := values[f.Doc][f.Path]
+		if cur == f.After {
+			continue // already there
+		}
+		if f.After == "" {
+			continue // the upstream removed it; not a kept value in the sense that matters here
+		}
+		k := KeptField{Doc: f.Doc, Path: f.Path, Current: cur, Upstream: f.After}
+		mp := MutationPath(f.Path)
+		for res, paths := range protected {
+			if res != "" && f.Doc != "" && res != f.Doc {
+				continue
+			}
+			for p := range paths {
+				if mp == p || strings.HasPrefix(mp, p+".") {
+					k.Protected = true
+				}
+			}
+		}
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Doc+out[i].Path < out[j].Doc+out[j].Path })
+	return out
+}
+
+// protectedPaths reads a MutationSources list into resource key
+// ("apiVersion/Kind namespace/name", "" when unknown) → protected paths.
+func protectedPaths(v any) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	list, _ := v.([]any)
+	for _, item := range list {
+		rm, _ := item.(map[string]any)
+		if rm == nil {
+			continue
+		}
+		res, _ := rm["Resource"].(map[string]any)
+		key := ""
+		if res != nil {
+			t, n := str(res["ResourceType"]), str(res["ResourceName"])
+			if t != "" {
+				key = t
+				if n != "" {
+					key += " " + n
+				}
+			}
+		}
+		pm, _ := rm["PathMutationMap"].(map[string]any)
+		for path, mi := range pm {
+			m, _ := mi.(map[string]any)
+			if m != nil && m["Protected"] == true {
+				if out[key] == nil {
+					out[key] = map[string]bool{}
+				}
+				out[key][path] = true
+			}
+		}
+	}
+	return out
 }
 
 // coveredUnits is the set of units of one upstream space the change order

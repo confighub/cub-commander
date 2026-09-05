@@ -235,3 +235,42 @@ func flatten(n *yaml.Node) map[string]string {
 	walk(n, "")
 	return out
 }
+
+// Values flattens a YAML stream to document key → path → scalar, the same
+// keys and paths Semantic reports, for looking a field up in one side.
+func Values(text string) (map[string]map[string]string, error) {
+	docs, err := parseDocs(text)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]map[string]string{}
+	for _, d := range docs {
+		out[d.key] = flatten(d.node)
+	}
+	return out, nil
+}
+
+// MutationPath renders one of Semantic's paths the way MutationSources key
+// theirs: list items by name become `.?name=x`, by index `.N`.
+func MutationPath(p string) string {
+	var b strings.Builder
+	for i := 0; i < len(p); i++ {
+		if p[i] != '[' {
+			b.WriteByte(p[i])
+			continue
+		}
+		j := strings.IndexByte(p[i:], ']')
+		if j < 0 {
+			b.WriteString(p[i:])
+			break
+		}
+		inner := p[i+1 : i+j]
+		if strings.Contains(inner, "=") {
+			b.WriteString(".?" + inner)
+		} else {
+			b.WriteString("." + inner)
+		}
+		i += j
+	}
+	return b.String()
+}

@@ -222,8 +222,13 @@ func TestPreviewAndPromoteFromTUI(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	v = stripANSI(m.View().Content)
-	if !strings.Contains(v, "what this promotes to catalog-api-test") || !strings.Contains(v, "api  · 1 field") || strings.Contains(v, "2Gi → 1Gi") {
+	if !strings.Contains(v, "what this promotes to catalog-api-test") || !strings.Contains(v, "api  · 1 field  · 1 kept") || strings.Contains(v, "2Gi → 1Gi") {
 		t.Errorf("test preview:\n%s", v)
+	}
+	for _, want := range []string{"⚠ NOT changed", "stays 2Gi", "upstream set 1Gi", "protected: a merge must not overwrite it"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("kept field not called out (%q):\n%s", want, v)
+		}
 	}
 	// P opens the confirm overlay with the cub command; n cancels
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'P', Text: "P"})
@@ -232,7 +237,7 @@ func TestPreviewAndPromoteFromTUI(t *testing.T) {
 		t.Fatalf("P did not open the confirm: %s", mm.status)
 	}
 	v = stripANSI(m.View().Content)
-	for _, want := range []string{"Promote catalog-api-5-3-0 into stage bases", "cub variant promote --change-order catalog-api-base/catalog-api-5-3-0 --target-stage bases", "3 unit(s), 4 field(s) change", "y promote"} {
+	for _, want := range []string{"Promote catalog-api-5-3-0 into stage bases", "cub variant promote --change-order catalog-api-base/catalog-api-5-3-0 --target-stage bases", "3 unit(s), 4 field(s) change", "1 field(s) NOT changed (kept)", "y promote"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("confirm lacks %q:\n%s", want, v)
 		}

@@ -856,19 +856,31 @@ func (m Model) previewText(w int) (string, string) {
 			out = append(out, titleStyle.Render(u.Slug)+"  "+errStyle.Render(u.Err))
 			continue
 		}
-		if u.NoChange {
+		if u.NoChange && len(u.Kept) == 0 {
 			unchanged = append(unchanged, u.Slug)
 			continue
 		}
 		head := titleStyle.Render(u.Slug)
-		if len(u.Fields) == 1 {
+		switch {
+		case u.NoChange:
+			head += dimStyle.Render("  · nothing changes")
+		case len(u.Fields) == 1:
 			head += dimStyle.Render("  · 1 field")
-		} else {
+		default:
 			head += dimStyle.Render(fmt.Sprintf("  · %d fields", len(u.Fields)))
+		}
+		if n := len(u.Kept); n == 1 {
+			head += warnStyle.Render("  · 1 kept")
+		} else if n > 1 {
+			head += warnStyle.Render(fmt.Sprintf("  · %d kept", n))
 		}
 		out = append(out, head)
 		out = append(out, fieldLines(u.Fields, w)...)
-		out = append(out, "", renderUnified(u.NormBefore, u.NormAfter, u.Slug+" now", u.Slug+" after promote"), "")
+		out = append(out, keptLines(u.Kept, w)...)
+		if !u.NoChange {
+			out = append(out, "", renderUnified(u.NormBefore, u.NormAfter, u.Slug+" now", u.Slug+" after promote"))
+		}
+		out = append(out, "")
 	}
 	if len(out) == 0 {
 		out = append(out, dimStyle.Render("nothing would change here"))
@@ -894,6 +906,31 @@ func (m Model) previewText(w int) (string, string) {
 		body = lipgloss.NewStyle().MaxWidth(w).Render(body)
 	}
 	return title, body
+}
+
+// keptLines renders the upstream changes this merge will NOT bring, loudly:
+// the space keeps its value, and the reason when a protection is recorded.
+func keptLines(kept []rollout.KeptField, w int) []string {
+	var out []string
+	for _, k := range kept {
+		p := k.Path
+		if k.Doc != "" {
+			p = dimStyle.Render(k.Doc+" ") + p
+		}
+		why := "kept as a local override"
+		if k.Protected {
+			why = "protected: a merge must not overwrite it"
+		}
+		line := "  " + warnStyle.Render("⚠ NOT changed") + "  " + p + ": stays " + warnStyle.Render(k.Current) + dimStyle.Render("  (upstream set "+k.Upstream+"; "+why+")")
+		if w > 0 && lipgloss.Width(line) > w-2 {
+			out = append(out, "  "+warnStyle.Render("⚠ NOT changed")+"  "+p,
+				"      stays "+warnStyle.Render(k.Current)+dimStyle.Render("  · upstream set "+k.Upstream),
+				dimStyle.Render("      "+why))
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // fieldLines renders changed fields, wrapping the wide ones.
@@ -962,13 +999,18 @@ func (m Model) promoteRequest() (tea.Model, tea.Cmd) {
 				lines = append(lines, dimStyle.Render(fmt.Sprintf("  %-40s skipped: %s", spv.Space.Slug, spv.Skipped)))
 				continue
 			}
-			n := 0
+			n, kept := 0, 0
 			for _, u := range spv.Units {
 				if !u.NoChange && u.Err == "" {
 					n++
 				}
+				kept += len(u.Kept)
 			}
-			lines = append(lines, fmt.Sprintf("  %-40s %d unit(s) change, %d covered", spv.Space.Slug, n, len(spv.Units)))
+			line := fmt.Sprintf("  %-40s %d unit(s) change, %d covered", spv.Space.Slug, n, len(spv.Units))
+			if kept > 0 {
+				line += warnStyle.Render(fmt.Sprintf("  · %d field(s) NOT changed (kept)", kept))
+			}
+			lines = append(lines, line)
 		}
 		lines = append(lines, "", fmt.Sprintf("%d unit(s), %d field(s) change across the stage. Promotion moves configuration only; it publishes no release.", units, fields), "", "Runs, per space:")
 		for _, spv := range p.Spaces {

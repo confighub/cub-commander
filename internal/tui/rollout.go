@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -708,14 +709,25 @@ func RolloutRunner(ctx context.Context, c rollout.Client, st *lang.SelectStmt, p
 		return rolloutMsg{stmt: st, plan: p, ro: ro, row: rows[0]}, nil
 	}
 	if p.RolloutCols {
+		// One derivation per order, a few at a time: each is several round
+		// trips, and the orders do not depend on each other.
+		sem := make(chan struct{}, 6)
+		var wg sync.WaitGroup
 		for _, row := range rows {
-			ro, err := rollout.Load(ctx, c, cache, row)
-			if err != nil {
-				row["Rollout"] = map[string]any{"state": rollout.StateUnknown, "stage": "", "next": "", "blocker": err.Error()}
-				continue
-			}
-			row["Rollout"] = map[string]any{"state": ro.State, "stage": ro.Reached(), "next": ro.NextName(), "blocker": ro.Blocker}
+			wg.Add(1)
+			go func(row cubclient.Row) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				ro, err := rollout.Load(ctx, c, cache, row)
+				if err != nil {
+					row["Rollout"] = map[string]any{"state": rollout.StateUnknown, "stage": "", "next": "", "blocker": err.Error()}
+					return
+				}
+				row["Rollout"] = map[string]any{"state": ro.State, "stage": ro.Reached(), "next": ro.NextName(), "blocker": ro.Blocker}
+			}(row)
 		}
+		wg.Wait()
 	}
 	return nil, nil
 }

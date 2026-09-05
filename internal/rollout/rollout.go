@@ -18,6 +18,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -233,17 +234,23 @@ func (r *Rollout) NextName() string {
 	return r.Stages[r.Next].Name
 }
 
-// Cache remembers what is the same across rollouts: parsed workflow
-// revisions and the spaces a stage clause selects.
+// Cache remembers what is the same across the rollouts of one run: the
+// spaces a stage clause selects (their live status must be re-read on the
+// next run, so a Cache lives for one statement) and the workflow errors.
+// Parsed workflow revisions are immutable and cached for the process.
 type Cache struct {
-	workflows map[string]*Workflow
-	spaces    map[string][]cubclient.Row
-	wfErr     map[string]error
+	mu     sync.Mutex
+	spaces map[string][]cubclient.Row
+	wfErr  map[string]error
 }
 
 func NewCache() *Cache {
-	return &Cache{workflows: map[string]*Workflow{}, spaces: map[string][]cubclient.Row{}, wfErr: map[string]error{}}
+	return &Cache{spaces: map[string][]cubclient.Row{}, wfErr: map[string]error{}}
 }
+
+// workflows is the process-wide cache of parsed workflow revisions, keyed
+// unit@rev. A revision never changes, so this never goes stale.
+var workflows sync.Map
 
 // Load derives the rollout for one ChangeOrder row.
 func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*Rollout, error) {
@@ -253,7 +260,24 @@ func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*Roll
 	o := ParseOrder(row)
 	r := &Rollout{Order: o, Next: -1}
 
+	// The base space and the workflow both follow from the order alone;
+	// read them together.
+	unitID, hasWF := o.Annotations[annWorkflowUnit]
+	var (
+		wf    *Workflow
+		wfRef string
+		wfErr error
+		wfWG  sync.WaitGroup
+	)
+	if hasWF {
+		wfWG.Add(1)
+		go func() {
+			defer wfWG.Done()
+			wf, wfRef, wfErr = cache.workflow(ctx, c, unitID, o.Annotations[annWorkflowRev])
+		}()
+	}
 	base, err := spaceByID(ctx, c, o.SpaceID)
+	wfWG.Wait()
 	if err != nil {
 		return nil, err
 	}
@@ -269,22 +293,20 @@ func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*Roll
 		r.State, r.Blocker = StateAborted, "Aborted: "+o.AbortedReason
 	}
 
-	unitID, ok := o.Annotations[annWorkflowUnit]
-	if !ok {
+	if !hasWF {
 		if r.State == "" {
 			r.State, r.Blocker = StateNoWorkflow, "No ChangeWorkflow governs this rollout, so it has no stages."
 		}
 		return r, nil
 	}
-	wf, ref, err := cache.workflow(ctx, c, unitID, o.Annotations[annWorkflowRev])
-	if err != nil {
-		r.Err = err.Error()
+	if wfErr != nil {
+		r.Err = wfErr.Error()
 		if r.State == "" {
-			r.State, r.Blocker = StateUnknown, "Could not read the ChangeWorkflow this rollout names: "+err.Error()
+			r.State, r.Blocker = StateUnknown, "Could not read the ChangeWorkflow this rollout names: "+wfErr.Error()
 		}
 		return r, nil
 	}
-	r.Workflow, r.WorkflowRef = wf, ref
+	r.Workflow, r.WorkflowRef = wf, wfRef
 
 	r.Component = base.Labels[labelComponent]
 	if r.Component == "" {
@@ -295,8 +317,21 @@ func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*Roll
 		return r, nil
 	}
 
-	for _, st := range wf.Stages {
-		rows, err := cache.stageSpaces(ctx, c, st, r.Component)
+	// The stage lookups are independent of each other: one round trip's
+	// worth of waiting rather than one per stage.
+	stageRows := make([][]cubclient.Row, len(wf.Stages))
+	stageErrs := make([]error, len(wf.Stages))
+	var wg sync.WaitGroup
+	for i, st := range wf.Stages {
+		wg.Add(1)
+		go func(i int, st Stage) {
+			defer wg.Done()
+			stageRows[i], stageErrs[i] = cache.stageSpaces(ctx, c, st, r.Component)
+		}(i, st)
+	}
+	wg.Wait()
+	for i, st := range wf.Stages {
+		rows, err := stageRows[i], stageErrs[i]
 		if err != nil {
 			r.Err = err.Error()
 			if r.State == "" {
@@ -474,32 +509,43 @@ func (c *Cache) stageSpaces(ctx context.Context, cl Client, st Stage, component 
 	if err != nil {
 		return nil, err
 	}
-	if rows, ok := c.spaces[where]; ok {
+	c.mu.Lock()
+	rows, ok := c.spaces[where]
+	c.mu.Unlock()
+	if ok {
 		return rows, nil
 	}
-	rows, err := cl.List(ctx, "/space", url.Values{"where": {where}, "select": {spaceSelect}})
+	rows, err = cl.List(ctx, "/space", url.Values{"where": {where}, "select": {spaceSelect}})
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve the Spaces of Stage '%s': %w", st.Name, err)
 	}
+	c.mu.Lock()
 	c.spaces[where] = rows
+	c.mu.Unlock()
 	return rows, nil
 }
 
 // workflow reads the pinned revision of the workflow unit and parses it.
 func (c *Cache) workflow(ctx context.Context, cl Client, unitID, rev string) (*Workflow, string, error) {
 	key := unitID + "@" + rev
-	if wf, ok := c.workflows[key]; ok {
+	if v, ok := workflows.Load(key); ok {
+		wf := v.(*Workflow)
 		return wf, wfRef(wf, rev), nil
 	}
-	if err, ok := c.wfErr[key]; ok {
+	c.mu.Lock()
+	err, failed := c.wfErr[key]
+	c.mu.Unlock()
+	if failed {
 		return nil, "", err
 	}
 	wf, err := loadWorkflow(ctx, cl, unitID, rev)
 	if err != nil {
+		c.mu.Lock()
 		c.wfErr[key] = err
+		c.mu.Unlock()
 		return nil, "", err
 	}
-	c.workflows[key] = wf
+	workflows.Store(key, wf)
 	return wf, wfRef(wf, rev), nil
 }
 

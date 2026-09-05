@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/confighub/cub-commander/internal/cubclient"
 )
@@ -14,6 +15,7 @@ import (
 // over entity-keyed rows, enough for the queries this package makes. Tests
 // in several packages use it, so it is not a _test file.
 type MemClient struct {
+	mu   sync.Mutex
 	Rows map[string][]cubclient.Row // path → rows
 	Raw  map[string]string          // path → body
 	Log  []string                   // every request, for assertions
@@ -26,8 +28,10 @@ type MemClient struct {
 }
 
 func (m *MemClient) PostRow(_ context.Context, path string, body string) (cubclient.Row, error) {
+	m.mu.Lock()
 	m.Log = append(m.Log, "POST "+path+" "+body)
 	m.Posts = append(m.Posts, path+" "+body)
+	m.mu.Unlock()
 	if m.OnPost != nil {
 		return m.OnPost(path, body)
 	}
@@ -35,8 +39,10 @@ func (m *MemClient) PostRow(_ context.Context, path string, body string) (cubcli
 }
 
 func (m *MemClient) PatchRows(_ context.Context, path string, q url.Values, body string) ([]cubclient.Row, int, error) {
+	m.mu.Lock()
 	m.Log = append(m.Log, "PATCH "+path+"?"+q.Encode())
 	m.Patches = append(m.Patches, q)
+	m.mu.Unlock()
 	if m.OnPatch == nil {
 		return nil, 0, fmt.Errorf("MemClient: no PATCH handler for %s", path)
 	}
@@ -44,8 +50,10 @@ func (m *MemClient) PatchRows(_ context.Context, path string, q url.Values, body
 }
 
 func (m *MemClient) List(_ context.Context, path string, q url.Values) ([]cubclient.Row, error) {
+	m.mu.Lock()
 	m.Log = append(m.Log, path+"?"+q.Encode())
 	rows, ok := m.Rows[path]
+	m.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("MemClient: no rows for %s", path)
 	}
@@ -60,8 +68,10 @@ func (m *MemClient) List(_ context.Context, path string, q url.Values) ([]cubcli
 }
 
 func (m *MemClient) GetRaw(_ context.Context, path string) (string, error) {
+	m.mu.Lock()
 	m.Log = append(m.Log, "GET "+path)
 	body, ok := m.Raw[path]
+	m.mu.Unlock()
 	if !ok {
 		return "", fmt.Errorf("MemClient: no body for %s", path)
 	}

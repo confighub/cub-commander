@@ -718,7 +718,9 @@ func (m Model) rolloutChangeText(w int) (string, string) {
 		}
 		labelA, labelB := fmt.Sprintf("%s @%d", u.Slug, u.StartRev), fmt.Sprintf("%s @%d", u.Slug, u.EndRev)
 		if rs.raw {
-			out = append(out, head+dimStyle.Render("  · raw text"), renderUnified(u.Before, u.After, labelA, labelB), "")
+			out = append(out, head+dimStyle.Render("  · raw text"))
+			out = append(out, keptLines(u.Kept, w)...)
+			out = append(out, renderUnified(u.Before, u.After, labelA, labelB), "")
 			continue
 		}
 		switch {

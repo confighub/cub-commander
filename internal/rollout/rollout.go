@@ -153,6 +153,13 @@ type StageState struct {
 	Spaces []Space
 }
 
+// HealthyForChange is whether the space runs this change healthily: it has
+// released the change and its live status is good. Live status alone says
+// the space is healthy on whatever it runs, which before the release is the
+// previous state, so the strip does not count it. (Neither this nor the UI
+// checks that the observation is of the released manifest; see F2.)
+func (sp Space) HealthyForChange() bool { return sp.Released && sp.Health.OK() }
+
 func (s StageState) Counts() (taken, released, healthy int) {
 	for _, sp := range s.Spaces {
 		if sp.Taken {
@@ -161,7 +168,7 @@ func (s StageState) Counts() (taken, released, healthy int) {
 		if sp.Released {
 			released++
 		}
-		if sp.Health.OK() {
+		if sp.HealthyForChange() {
 			healthy++
 		}
 	}
@@ -719,9 +726,9 @@ func (r *Rollout) Text() string {
 			if sp.Released {
 				flags += "R"
 			}
-			if sp.Health.OK() {
+			if sp.HealthyForChange() {
 				flags += "H"
-			} else if sp.Health.Present {
+			} else if sp.Released && sp.Health.Present {
 				flags += "!"
 			}
 			if flags != "" {

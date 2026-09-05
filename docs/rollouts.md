@@ -189,7 +189,10 @@ which is the audit trail the walkthrough closes on.
   from `final.prerequisites`, matching `cub changeorder get`.
 - **Healthy gate on a stale observation (F2).** Commander shows the observation's time next
   to the healthy bit so the reader can see it predates the release; it does not second-guess
-  the gate.
+  the gate. The strip's *healthy* count and the ✓ only count a space that has **released** the
+  change (Jesper, 2026-09-05): before that the live status describes the previous state, and
+  "3/3 healthy" on a stage nothing has been promoted to reads as done. Neither commander nor
+  the UI checks that the observation is of the released manifest.
 - **No OR in where.** Start- and end-tag revisions are two list calls, not one.
 - **One row per unit by default.** `/revision` and `/revision_data` keep the newest row per
   unit unless `distinct_on=Off` (which needs a `limit`). The tag queries want exactly that; the

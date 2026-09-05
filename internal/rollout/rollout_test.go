@@ -58,6 +58,11 @@ func TestBlockedByHealth(t *testing.T) {
 	if taken != 2 || released != 2 || healthy != 1 {
 		t.Errorf("test counts %d %d %d", taken, released, healthy)
 	}
+	// prod's clusters report Healthy, but on the previous state: nothing is
+	// released there, so the change is not healthy anywhere in prod yet
+	if _, _, healthy := r.Stages[4].Counts(); healthy != 0 {
+		t.Errorf("prod healthy %d before any release", healthy)
+	}
 	// the stage clause carries the component, and the workflow is read once
 	sawComponent := false
 	for _, l := range c.Log {

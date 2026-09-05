@@ -501,8 +501,10 @@ func (m Model) rolloutLeft(w, h int) string {
 				cur = "▸ "
 				style = focusStyle
 			}
-			health := bit(sp.Health.OK(), "✓")
-			if sp.Health.Present && !sp.Health.OK() {
+			// healthy means: released this change, and the live status is good.
+			// Before the release the live status describes the previous state.
+			health := bit(sp.HealthyForChange(), "✓")
+			if sp.Released && sp.Health.Present && !sp.Health.OK() {
 				health = badStyle.Render("✗")
 			}
 			if !sp.Releasable {
@@ -521,6 +523,9 @@ func (m Model) rolloutLeft(w, h int) string {
 			}
 			if sp.Health.Message != "" {
 				obs += " · " + sp.Health.Message
+			}
+			if !sp.Released {
+				obs += " (before this change; not counted until released)"
 			}
 			lines = append(lines, dimStyle.Render(lipgloss.NewStyle().MaxWidth(w-2).Render("  live: "+obs)))
 		}

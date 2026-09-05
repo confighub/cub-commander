@@ -98,6 +98,7 @@ type Model struct {
 	textFrom      mode
 
 	// rollout
+	rollGen       int
 	roll          *rolloutState
 	changeLoader  ChangeLoader
 	previewLoader PreviewLoader
@@ -246,6 +247,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case previewMsg:
 		m.previewLoaded(msg)
 		return m, nil
+	case rolloutTickMsg:
+		return m.rolloutTick(msg)
 	case actionMsg:
 		return m.actionDone(msg)
 	case diffMsg:

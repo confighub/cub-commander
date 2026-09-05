@@ -56,6 +56,9 @@ func runCmd(m tea.Model, cmd tea.Cmd, depth int) tea.Model {
 	if _, isTick := out.(tickMsg); isTick {
 		return m // the tick only reschedules itself while running
 	}
+	if _, isTick := out.(rolloutTickMsg); isTick {
+		return m // the rollout auto-refresh is driven explicitly in tests
+	}
 	var next tea.Cmd
 	m, next = m.Update(out)
 	if next != nil && depth < 2 {

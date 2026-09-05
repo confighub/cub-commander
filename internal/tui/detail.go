@@ -187,7 +187,7 @@ func (m Model) detailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.openRevisions()
-	case "D":
+	case "D", "shift+d":
 		if d.entity == "Resource" {
 			return m, nil
 		}
@@ -218,7 +218,7 @@ func (m Model) detailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.detailLoad()
 		}
 		return m.editData()
-	case "R":
+	case "R", "shift+r":
 		d.loaded, d.loading = false, false
 		m.renderDetail()
 		return m, m.detailLoad()

@@ -40,6 +40,8 @@ type rolloutState struct {
 	confirm        *confirmState // the write waiting for y
 	report         string        // shown once the refresh after a write lands
 	reportTitle    string
+	readAt         time.Time // when this reading was taken
+	gen            int       // identifies this reading to its auto-refresh tick
 	// the change per space, keyed by SpaceID; loaded on demand
 	changes map[string][]rollout.UnitChange
 	pending map[string]bool
@@ -67,9 +69,17 @@ type changeMsg struct {
 	err              error
 }
 
+// rolloutRefreshEvery is the auto-refresh period in rollout mode: gates are
+// read live and the thing people wait for (a release, argobot's report)
+// happens elsewhere, so the screen must not sit on a stale reading.
+var rolloutRefreshEvery = 10 * time.Second
+
+type rolloutTickMsg struct{ gen int }
+
 func (m *Model) rolloutLoaded(msg rolloutMsg) tea.Cmd {
 	m.running = false
 	m.chooserOpen = false
+	m.rollGen++
 	rs := &rolloutState{ro: msg.ro, row: msg.row, changes: map[string][]rollout.UnitChange{}, pending: map[string]bool{}, errs: map[string]string{},
 		previews: map[int]*rollout.Preview{}, previewPending: map[int]bool{}, previewErrs: map[int]string{}}
 	var report, reportTitle string
@@ -90,17 +100,49 @@ func (m *Model) rolloutLoaded(msg rolloutMsg) tea.Cmd {
 		}
 	}
 	rs.clamp()
+	rs.readAt, rs.gen = time.Now(), m.rollGen
 	m.roll = rs
 	m.stmt, m.plan = msg.stmt, msg.plan
 	m.mode = modeRollout
 	m.focus = focusMain
-	m.record(msg.src, len(msg.ro.Stages), "")
+	if msg.src != "" {
+		m.record(msg.src, len(msg.ro.Stages), "")
+	}
 	m.setStatus(fmt.Sprintf("%s · %s", msg.ro.State, msg.ro.Blocker), false)
-	cmd := tea.Batch(m.changeFetch(), m.previewFetch())
+	gen := rs.gen
+	cmd := tea.Batch(m.changeFetch(), m.previewFetch(), tea.Tick(rolloutRefreshEvery, func(time.Time) tea.Msg { return rolloutTickMsg{gen: gen} }))
 	if report != "" {
 		m.showText(reportTitle, report)
 	}
 	return cmd
+}
+
+// rolloutTick re-reads the rollout quietly: no loading panel, position kept.
+// Skipped when the reading it was scheduled for is gone, a write is waiting
+// for confirmation, or a statement is running.
+func (m Model) rolloutTick(msg rolloutTickMsg) (tea.Model, tea.Cmd) {
+	rs := m.roll
+	if rs == nil || rs.gen != msg.gen || m.stmt == nil || m.running {
+		return m, nil
+	}
+	if m.mode != modeRollout && !(m.mode == modeText && m.textFrom == modeRollout) {
+		return m, nil
+	}
+	if rs.confirm != nil {
+		gen := rs.gen
+		return m, tea.Tick(rolloutRefreshEvery, func(time.Time) tea.Msg { return rolloutTickMsg{gen: gen} })
+	}
+	runner, st, sess := m.runner, m.stmt, m.sess
+	return m, func() tea.Msg {
+		out, err := runner(context.Background(), st, sess)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		if r, ok := out.(rolloutMsg); ok {
+			return r // src empty: not recorded in history again
+		}
+		return out
+	}
 }
 
 func (rs *rolloutState) clamp() {
@@ -167,12 +209,22 @@ func (m *Model) changeLoaded(msg changeMsg) {
 	rs.changes[msg.spaceID] = msg.changes
 }
 
+// keyName is the key as the handlers match it: a shifted letter reads as
+// its capital whether the terminal reported text or a shift modifier.
+func keyName(k tea.KeyPressMsg) string {
+	s := k.String()
+	if len(s) == 7 && strings.HasPrefix(s, "shift+") {
+		return strings.ToUpper(s[6:])
+	}
+	return s
+}
+
 func (m Model) rolloutKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	rs := m.roll
 	if rs == nil {
 		return m, nil
 	}
-	switch k.String() {
+	switch keyName(k) {
 	case "left", "h":
 		rs.stage--
 		rs.space, rs.scroll = 0, 0
@@ -261,6 +313,7 @@ func (m Model) rolloutKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // rolloutBack leaves the mode: the statement it was opened from comes back.
 func (m *Model) rolloutBack() {
+	m.rollGen++ // stops the auto-refresh
 	if m.roll != nil && m.roll.fromStmt != nil {
 		m.stmt, m.plan = m.roll.fromStmt, m.roll.fromPlan
 		m.cmd.SetValue(lang.StmtString(m.stmt))
@@ -331,6 +384,7 @@ func (m Model) rolloutView() string {
 		}
 		sub = fmt.Sprintf(" workflow %s · component %s · %d of %d spaces still to take it", ro.WorkflowRef, ro.Component, toGo, len(ro.Order.InScope)-1)
 	}
+	sub += fmt.Sprintf(" · read %s, refreshes every %ds", rs.readAt.Format("15:04:05"), int(rolloutRefreshEvery.Seconds()))
 	if ro.Err != "" {
 		sub += "  " + errStyle.Render(ro.Err)
 	}

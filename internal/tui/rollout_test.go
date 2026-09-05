@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/confighub/cub-commander/internal/plan"
 	"github.com/confighub/cub-commander/internal/rollout"
 )
+
+func init() { rolloutRefreshEvery = time.Millisecond } // never wait on the auto-refresh in tests
 
 // stubRollouts answers ChangeOrder statements from the chapter-1 fixture,
 // deriving rollouts exactly as the real runner does.
@@ -385,5 +388,43 @@ func TestPromoteAndReleaseFromTUI(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'B', Text: "B"})
 	if mm = m.(Model); mm.roll.confirm != nil || !strings.Contains(mm.status, "lacks config") {
 		t.Fatalf("B past a missing unit: confirm %v status %q", mm.roll.confirm != nil, mm.status)
+	}
+}
+
+func TestRolloutAutoRefresh(t *testing.T) {
+	m, mem := openRollouts(t)
+	mm := m.(Model)
+	mm.tbl.SetCursor(1)
+	m = mm
+	m = press(m, "enter")
+	mm = m.(Model)
+	gen := mm.roll.gen
+	before := len(mem.Log)
+	// the tick for this reading re-runs the statement quietly and keeps the position
+	mm.roll.stage = 3
+	m = mm
+	m, cmd := m.Update(rolloutTickMsg{gen: gen})
+	if cmd == nil {
+		t.Fatal("tick did not refresh")
+	}
+	m = runCmd(m, cmd, 0)
+	mm = m.(Model)
+	if mm.mode != modeRollout || mm.roll.stage != 3 || mm.roll.gen == gen || len(mem.Log) == before || mm.running {
+		t.Errorf("after tick: mode %v stage %d gen %d→%d requests %d→%d running %v", mm.mode, mm.roll.stage, gen, mm.roll.gen, before, len(mem.Log), mm.running)
+	}
+	// a stale tick (an older reading's) does nothing
+	m, cmd = m.Update(rolloutTickMsg{gen: gen})
+	if cmd != nil {
+		t.Error("stale tick refreshed")
+	}
+	// shift+r reads as R
+	if keyName(tea.KeyPressMsg{Code: 'r', Mod: tea.ModShift}) != "R" || keyName(tea.KeyPressMsg{Code: 'R', Text: "R"}) != "R" {
+		t.Error("keyName")
+	}
+	// leaving the mode stops the refresh
+	m = press(m, "esc")
+	mm = m.(Model)
+	if mm.mode != modeResults {
+		t.Fatalf("mode %v", mm.mode)
 	}
 }

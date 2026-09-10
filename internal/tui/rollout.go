@@ -56,11 +56,12 @@ type rolloutState struct {
 type ChangeLoader func(ctx context.Context, ro *rollout.Rollout, spaceID string) ([]rollout.UnitChange, error)
 
 type rolloutMsg struct {
-	src  string
-	stmt *lang.SelectStmt
-	plan *plan.Plan
-	ro   *rollout.Rollout
-	row  cubclient.Row
+	src   string
+	stmt  *lang.SelectStmt
+	plan  *plan.Plan
+	ro    *rollout.Rollout
+	row   cubclient.Row
+	quiet bool // an auto-refresh tick: keep what was loaded on top of the reading
 }
 
 type changeMsg struct {
@@ -88,6 +89,13 @@ func (m *Model) rolloutLoaded(msg rolloutMsg) tea.Cmd {
 		// a refresh keeps the position; a write's report is shown now
 		rs.stage, rs.space, rs.pane, rs.raw = m.roll.stage, m.roll.space, m.roll.pane, m.roll.raw
 		report, reportTitle = m.roll.report, m.roll.reportTitle
+		if msg.quiet && m.roll.ro.Order.ID == msg.ro.Order.ID {
+			// the quiet tick re-reads the rollout (gates, health, taken) but keeps
+			// the dry runs and diffs: they are slow, and re-running them redrew the
+			// pane every period. R, or a write, runs them again.
+			rs.previews, rs.previewErrs, rs.previewPending = m.roll.previews, m.roll.previewErrs, m.roll.previewPending
+			rs.changes, rs.errs, rs.pending = m.roll.changes, m.roll.errs, m.roll.pending
+		}
 	} else {
 		rs.fromStmt, rs.fromPlan = m.stmt, m.plan
 		rs.stage = max(msg.ro.Next, 0)
@@ -139,6 +147,7 @@ func (m Model) rolloutTick(msg rolloutTickMsg) (tea.Model, tea.Cmd) {
 			return errMsg{err: err}
 		}
 		if r, ok := out.(rolloutMsg); ok {
+			r.quiet = true
 			return r // src empty: not recorded in history again
 		}
 		return out
@@ -384,7 +393,7 @@ func (m Model) rolloutView() string {
 		}
 		sub = fmt.Sprintf(" workflow %s · component %s · %d of %d spaces still to take it", ro.WorkflowRef, ro.Component, toGo, len(ro.Order.InScope)-1)
 	}
-	sub += fmt.Sprintf(" · read %s, refreshes every %ds", rs.readAt.Format("15:04:05"), int(rolloutRefreshEvery.Seconds()))
+	sub += fmt.Sprintf(" · read %s, re-read every %ds; R re-runs the dry run", rs.readAt.Format("15:04:05"), int(rolloutRefreshEvery.Seconds()))
 	if ro.Err != "" {
 		sub += "  " + errStyle.Render(ro.Err)
 	}

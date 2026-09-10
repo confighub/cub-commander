@@ -400,8 +400,13 @@ func TestRolloutAutoRefresh(t *testing.T) {
 	mm = m.(Model)
 	gen := mm.roll.gen
 	before := len(mem.Log)
-	// the tick for this reading re-runs the statement quietly and keeps the position
+	// the tick for this reading re-runs the statement quietly and keeps the
+	// position, the loaded dry run and the loaded diffs (re-running them redrew
+	// the pane every period)
 	mm.roll.stage = 3
+	loaded := &rollout.Preview{}
+	mm.roll.previews[3] = loaded
+	mm.roll.changes["kept"] = nil
 	m = mm
 	m, cmd := m.Update(rolloutTickMsg{gen: gen})
 	if cmd == nil {
@@ -411,6 +416,18 @@ func TestRolloutAutoRefresh(t *testing.T) {
 	mm = m.(Model)
 	if mm.mode != modeRollout || mm.roll.stage != 3 || mm.roll.gen == gen || len(mem.Log) == before || mm.running {
 		t.Errorf("after tick: mode %v stage %d gen %d→%d requests %d→%d running %v", mm.mode, mm.roll.stage, gen, mm.roll.gen, before, len(mem.Log), mm.running)
+	}
+	if mm.roll.previews[3] != loaded {
+		t.Error("tick dropped the loaded dry run")
+	}
+	if _, ok := mm.roll.changes["kept"]; !ok {
+		t.Error("tick dropped the loaded diffs")
+	}
+	// R re-reads everything, the dry run included
+	m = press(m, "R")
+	mm = m.(Model)
+	if mm.roll.previews[3] == loaded {
+		t.Error("R kept the old dry run")
 	}
 	// a stale tick (an older reading's) does nothing
 	m, cmd = m.Update(rolloutTickMsg{gen: gen})

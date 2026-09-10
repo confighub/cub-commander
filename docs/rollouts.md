@@ -116,8 +116,10 @@ workflow catalog-api-workflow @rev 3 · component catalog-api · 6 of 7 spaces t
   to the space, `u` to its units, `Esc` back one level, `^X` shows the plan and the exact
   `cub` commands the actions would run.
 
-The mode refreshes itself every 10 s while open (gates are read live, and argobot's report
-is the thing people wait for in step 7); `R` refreshes now.
+The mode re-reads the rollout every 10 s while open (gates are read live, and argobot's report
+is the thing people wait for in step 7), keeping the dry runs and diffs already loaded: those
+are slow, and re-running them redrew the pane every period (Jesper, 2026-09-09). `R` re-reads
+everything, the dry run included; so does the refresh after a write.
 
 ## 3. The actions
 

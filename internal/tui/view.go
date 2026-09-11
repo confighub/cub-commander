@@ -422,7 +422,9 @@ selections into where steps and shows the grid, b returns to the chooser.
 Detail (Enter on a row): tabs 1 Metadata · 2 Data (←→ switch). On Data: e opens $EDITOR on the
 unit's configuration and, when you save and exit, posts it as a new revision, conditional on
 the DataHash you read (If-Match). A conflict reloads the head and keeps your edit for the next
-e. R reloads. A resource opens the same way: its Data tab is its own document, and e edits
+e. R reloads. Resource tab 3 Evidence is a read-only snapshot; r refreshes it using an explicit
+--scout-binding TARGET_ID=KUBE_CONTEXT. It is not a live/desired diff or a delivery verdict.
+A resource opens the same way: its Data tab is its own document, and e edits
 that document; the save writes the unit with the document replaced, under the unit's hash.
 d lists the unit's revisions: ⏎ diffs the highlighted one against the current
 data, m marks one and ⏎ on another diffs the two; Esc returns to the list, Esc again closes

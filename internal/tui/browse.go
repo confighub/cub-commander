@@ -129,7 +129,7 @@ func (m *Model) resourceFetch(panes [][]paneItem) tea.Cmd {
 			}
 			q := url.Values{
 				"where":  {"UnitID IN (" + strings.Join(quoted, ", ") + ")"},
-				"select": {"ResourceType,ResourceName,ResourceID,UnitID,SpaceID,UnitSlug"},
+				"select": {"ResourceType,ResourceName,ResourceID,UnitID,SpaceID,UnitSlug,TargetID"},
 			}
 			rows, err := fetch(context.Background(), "/resource", q)
 			return resourcesMsg{unitIDs: chunk, rows: rows, err: err}

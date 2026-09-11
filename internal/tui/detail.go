@@ -427,7 +427,7 @@ func (m Model) detailView() string {
 		extra = dimStyle.Render("  2 or → for Data · d diff revisions · s space · r revisions · l links")
 	}
 	if d.tab == 2 {
-		extra = dimStyle.Render("  r refresh")
+		extra = dimStyle.Render("  " + d.evidence.label(time.Now()) + " | r refresh")
 	}
 	head := lipgloss.NewStyle().MaxWidth(w).Render(titleStyle.Render(" "+name) + "  " + strings.Join(parts, " ") + extra)
 	if d.entity == "Resource" {
@@ -435,6 +435,9 @@ func (m Model) detailView() string {
 		head = lipgloss.NewStyle().MaxWidth(w).Render(strings.Join(parts, " ") + "  " + titleStyle.Render(name) + extra)
 		if d.tab == 2 {
 			head = lipgloss.NewStyle().MaxWidth(w).Render(strings.Join(parts, " ") + extra)
+			if w < 65 {
+				head = lipgloss.NewStyle().MaxWidth(w).Render(keyStyle.Render("3 Evidence") + extra)
+			}
 		}
 	}
 	if d.picker != nil {

@@ -178,6 +178,7 @@ func TestEvidenceViewports(t *testing.T) {
 			t.Fatal(err)
 		}
 		snap := recordedSnapshot(t, req)
+		snap.ObservedAt, snap.ExpiresAt = time.Unix(1, 0), time.Unix(16, 0)
 		m.det.tab = 2
 		m.det.evidence = &evidenceState{request: req, snapshot: &snap}
 		m.renderDetail()
@@ -191,6 +192,10 @@ func TestEvidenceViewports(t *testing.T) {
 		}
 		if !strings.Contains(ansi.Strip(m.View().Content), "snapshot") {
 			t.Fatal("empty panel")
+		}
+		m.detail.GotoBottom()
+		if !strings.Contains(ansi.Strip(m.View().Content), "STALE") {
+			t.Fatal("freshness hidden while scrolling evidence")
 		}
 	}
 }

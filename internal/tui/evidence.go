@@ -30,6 +30,23 @@ func (s *evidenceState) stop() {
 	}
 }
 
+func (s *evidenceState) label(now time.Time) string {
+	switch {
+	case s == nil || s.err != nil:
+		return "unavailable"
+	case s.loading:
+		return "reading"
+	case s.snapshot == nil:
+		return "cancelled"
+	case !s.snapshot.Available:
+		return "unavailable"
+	case !now.Before(s.snapshot.ExpiresAt) || now.Before(s.snapshot.ObservedAt):
+		return "STALE"
+	default:
+		return "snapshot"
+	}
+}
+
 type evidenceMsg struct {
 	state    *evidenceState
 	snapshot scout.Snapshot

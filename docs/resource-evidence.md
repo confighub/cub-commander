@@ -1,9 +1,10 @@
 # Resource evidence
 
-Unreleased. Requires Scout with the bounded `explain` contract, merged in
+Available in Commander v0.3.0 with Scout v2.10.0. The bounded `explain` contract was merged in
 [provider #522](https://github.com/confighub/cub-scout/pull/522) and extended with
 observed origin metadata in [#523](https://github.com/confighub/cub-scout/pull/523).
-Scout v2.9.0 does not have this contract. Work is tracked in
+Scout v2.9.0 does not have this contract. Publish/install the provider first.
+Work is tracked in
 [observer #519](https://github.com/confighub/cub-scout/issues/519).
 
 ## Use

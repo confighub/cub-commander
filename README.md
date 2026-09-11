@@ -5,7 +5,7 @@ language over the server's real primitives (list + where, Filters, Views, functi
 `EXPLAIN` printing the equivalent `cub` command. SQL SELECT is accepted as an on-ramp. Design in `docs/design.md`, milestones
 in `docs/roadmap.md`.
 
-### Resource evidence (unreleased)
+### Resource evidence (v0.3.0)
 
 | User question | Surface | Evidence and limits |
 |---|---|---|
@@ -14,8 +14,8 @@ in `docs/roadmap.md`.
 | Will navigating tabs keep hitting my cluster? | Captured snapshot, `r` refresh | Tab revisits reuse the selected snapshot without requests. Capture/expiry timestamps and `STALE` label remain visible; refresh discards the old success before reading. No background polling. |
 | Can a missing binding or failed read look healthy? | Unavailable state | Missing identity/binding prevents execution. Failed, incompatible and mismatched responses are unavailable; no guessed source links or healthy fallback. |
 
-Requires a Scout build containing the bounded `explain` contract (planned v2.10;
-v2.9.0 does not include it). Start with an explicit binding:
+Requires Scout v2.10.0 or a compatible bounded `explain` provider; v2.9.0 does
+not include it. Upgrade Scout before Commander. Start with an explicit binding:
 
 ```sh
 cub commander --scout-binding '<target-id>=<kube-context>'
@@ -26,6 +26,8 @@ cub commander --scout-binary /absolute/path/to/cub-scout --scout-binding '<targe
 Open a Resource row and select `3 Evidence`; `r` refreshes. This tab is read-only;
 existing Data editing and rollout actions are separate. See
 [resource evidence](docs/resource-evidence.md) for scope, examples and proof.
+See [v0.3.0 release notes](docs/releases/v0.3.0.md) for pinned install/upgrade
+commands, package verification and known validation limits.
 
 ## Install
 

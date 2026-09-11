@@ -17,6 +17,7 @@ import (
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
 	"github.com/confighub/cub-commander/internal/rollout"
+	"github.com/confighub/cub-commander/internal/scout"
 	"github.com/confighub/cub-commander/internal/tui"
 )
 
@@ -25,10 +26,12 @@ var version = "dev"
 func Version() string { return version }
 
 var (
-	flagExec   string
-	flagSpace  string
-	flagOutput string
-	flagNoHdr  bool
+	flagExec          string
+	flagSpace         string
+	flagOutput        string
+	flagNoHdr         bool
+	flagScoutBinary   string
+	flagScoutBindings []string
 )
 
 var root = &cobra.Command{
@@ -41,7 +44,11 @@ var root = &cobra.Command{
 		if flagExec != "" {
 			return runStatements(cmd.Context(), flagExec)
 		}
-		return tui.Run(plan.Session{Space: flagSpace})
+		bindings, err := scout.ParseBindings(flagScoutBindings)
+		if err != nil {
+			return err
+		}
+		return tui.Run(plan.Session{Space: flagSpace}, scout.Config{Binary: flagScoutBinary, Bindings: bindings})
 	},
 }
 
@@ -50,6 +57,8 @@ func init() {
 	root.Flags().StringVar(&flagSpace, "space", "*", "session space scope: a space slug, or '*' for the whole org (USE changes it later)")
 	root.Flags().StringVarP(&flagOutput, "output", "o", "table", "table, json or csv")
 	root.Flags().BoolVar(&flagNoHdr, "no-headers", false, "omit the header line")
+	root.Flags().StringVar(&flagScoutBinary, "scout-binary", "", "standalone Scout executable path (default: cub scout plugin)")
+	root.Flags().StringArrayVar(&flagScoutBindings, "scout-binding", nil, "explicit TARGET_ID=KUBE_CONTEXT for Resource evidence (repeatable)")
 	_ = root.Flags().MarkHidden("execute")
 	root.AddCommand(&cobra.Command{Use: "version", Short: "Print the version", Run: func(*cobra.Command, []string) { fmt.Println(version) }})
 }

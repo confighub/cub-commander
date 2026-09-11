@@ -1,0 +1,21 @@
+{
+  "resourceRead": {
+    "available": true,
+    "context": "test-cluster",
+    "resource": {"apiVersion": "apps/v1", "kind": "Deployment", "namespace": "team-a", "name": "api"},
+    "uid": "observed-uid",
+    "resourceVersion": "42",
+    "observedAt": "2026-09-11T12:00:00Z",
+    "expiresAt": "2026-09-11T12:00:15Z",
+    "cache": "miss",
+    "reads": {"discovery": 1, "object": 1}
+  },
+  "configHubOrigin": {"source": "annotation:confighub.com/origin", "spaceId": "observed-space", "unitSlug": "observed-unit", "revisionNum": 9007199254740993},
+  "resource": "Deployment/api",
+  "namespace": "team-a",
+  "owner": "ArgoCD",
+  "health": "Current",
+  "drift": "Not assessed (bounded read)",
+  "notes": ["Object-local readiness is not proof of delivery completion or application success."],
+  "omissions": [{"missing": "desired-live-comparison", "reason": "No desired configuration or drift/scan assessment was requested.", "severity": "info"}]
+}

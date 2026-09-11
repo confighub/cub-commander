@@ -7,12 +7,14 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/confighub/cub-commander/internal/cubclient"
 	"github.com/confighub/cub-commander/internal/exec"
+	"github.com/confighub/cub-commander/internal/scout"
 )
 
 // Detail is master/detail for one row: a Metadata tab (the extended row)
@@ -21,16 +23,17 @@ import (
 // the data was read at; a conflict keeps your buffer for the next `e`.
 
 type detailState struct {
-	row     cubclient.Row
-	entity  string
-	tab     int    // 0 metadata, 1 data
-	data    string // the text shown and edited: the unit's data, or one resource's document
-	hash    string // the unit's DataHash the data was read at
-	loaded  bool
-	loading bool
-	draft   string // your last edit when the save conflicted
-	from    mode   // where Esc returns
-	picker  *revPicker
+	row      cubclient.Row
+	entity   string
+	tab      int    // 0 metadata, 1 data, 2 read-only resource evidence
+	data     string // the text shown and edited: the unit's data, or one resource's document
+	hash     string // the unit's DataHash the data was read at
+	loaded   bool
+	loading  bool
+	draft    string // your last edit when the save conflicted
+	from     mode   // where Esc returns
+	picker   *revPicker
+	evidence *evidenceState
 
 	// For a Resource: the unit that owns it and the document it is.
 	unitRow  cubclient.Row
@@ -88,10 +91,21 @@ func (m *Model) openDetailRow(row cubclient.Row) {
 	same := m.det != nil && m.det.entity == entity && m.det.unitKey() == unitID(unitRow) && unitID(unitRow) != "" &&
 		(entity != "Resource" || rowLabel("Resource", m.det.row) == rowLabel("Resource", row))
 	if same {
+		if e := m.det.evidence; e != nil {
+			req, err := scout.Resolve(row, m.scoutConfig.Bindings)
+			if err != nil || req != e.request {
+				e.stop()
+				m.det.evidence = nil
+				m.det.tab = 0
+			}
+		}
 		// same unit or resource: keep the loaded data and draft, but never a stale picker
 		m.det.row = row
 		m.det.picker = nil
 	} else {
+		if m.det != nil {
+			m.det.evidence.stop()
+		}
 		m.det = &detailState{row: row, entity: entity, from: m.mode, unitRow: unitRow}
 	}
 	if m.mode != modeDetail {
@@ -108,6 +122,8 @@ func (m *Model) renderDetail() {
 	}
 	var body string
 	switch m.det.tab {
+	case 2:
+		body = m.evidenceBody(time.Now())
 	case 1:
 		switch {
 		case m.det.loaded:
@@ -180,6 +196,23 @@ func (m Model) detailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if d.picker != nil {
 		return m.pickerKey(k)
 	}
+	if d.entity == "Resource" {
+		switch k.String() {
+		case "3":
+			d.tab = 2
+			cmd := m.loadEvidence(false)
+			m.renderDetail()
+			return m, cmd
+		case "r", "R", "shift+r":
+			if d.tab == 2 {
+				return m, m.loadEvidence(true)
+			}
+		case "e":
+			if d.tab == 2 {
+				return m, nil
+			}
+		}
+	}
 	switch k.String() {
 	case "d":
 		if d.entity != "Unit" {
@@ -228,6 +261,7 @@ func (m Model) detailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.pivotRow(k.String(), d.row, d.entity)
 	case "q":
+		d.evidence.stop()
 		return m, tea.Quit
 	case "?":
 		m.helpOpen = true
@@ -359,6 +393,9 @@ func (m Model) detailView() string {
 	if d.editable() {
 		tabs = append(tabs, "Data")
 	}
+	if d.entity == "Resource" {
+		tabs = append(tabs, "Evidence")
+	}
 	var parts []string
 	for i, t := range tabs {
 		label := fmt.Sprintf(" %d %s ", i+1, t)
@@ -389,7 +426,20 @@ func (m Model) detailView() string {
 	case d.tab == 0:
 		extra = dimStyle.Render("  2 or → for Data · d diff revisions · s space · r revisions · l links")
 	}
+	if d.tab == 2 {
+		extra = dimStyle.Render("  " + d.evidence.label(time.Now()) + " | r refresh")
+	}
 	head := lipgloss.NewStyle().MaxWidth(w).Render(titleStyle.Render(" "+name) + "  " + strings.Join(parts, " ") + extra)
+	if d.entity == "Resource" {
+		// Keep the new action visible even when a resource has a long name.
+		head = lipgloss.NewStyle().MaxWidth(w).Render(strings.Join(parts, " ") + "  " + titleStyle.Render(name) + extra)
+		if d.tab == 2 {
+			head = lipgloss.NewStyle().MaxWidth(w).Render(strings.Join(parts, " ") + extra)
+			if w < 65 {
+				head = lipgloss.NewStyle().MaxWidth(w).Render(keyStyle.Render("3 Evidence") + extra)
+			}
+		}
+	}
 	if d.picker != nil {
 		return head + "\n" + m.pickerView(w)
 	}

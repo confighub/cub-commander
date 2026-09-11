@@ -14,6 +14,7 @@ not written anywhere else. Read this before adding a mode.*
 | `internal/exec` | Runs plans: generic REST rows (`cubclient.Row` = `map[string]any` keyed by entity name, joins as sibling keys), local where/group/order/limit, `Labels.*` expansion (`expandColumns`), diff pairing (`PairRows`, `refine`), unified diff, unit data read/write (`UnitDataWithHash`, `SaveUnitData`), YAML stream splitting (`docs.go`). |
 | `internal/cubclient` | Thin HTTP client: `List`, `GetRaw`, `GetRawETag`, `PutRaw` (If-Match, 409 → `ConflictError`), `SpaceID` cache, retrying transport. |
 | `internal/history` | jsonl statement history under `~/.confighub/commander/`. |
+| `internal/scout` | Exact Resource identity and explicit Target-ID/context binding, bounded JSON subprocess adapter, response validation, output/time limits and supervised process cancellation. No Kubernetes client, joined-row fallback, or persistent cache. |
 | `internal/rollout` | A ChangeOrder read as a rollout: the pinned ChangeWorkflow revision, each stage's spaces (selector + component, filtered to `InScopeSpaceIDs`), taken/released from the server's per-space sets, healthy from the live-status annotation, the next stage and its gates in the CLI's words (`derive`), and the change per space from the order's start/end tags (`Change`). `MemClient` + `ChapterOne()` are the offline fixture other packages' tests use. See `rollouts.md`. |
 | `internal/tui` | The Bubble Tea v2 app. See below. |
 | `cmd` | cobra root: `commander` opens the TUI; hidden `-e` runs statements for scripts and tests. |
@@ -63,6 +64,16 @@ One `Model` (`app.go`) with:
   and the report shown once it lands. Anything new that writes follows one of these two shapes.
 
 ## Conventions worth keeping
+
+Resource detail also has `3 Evidence` (`evidence.go`). `run.go` injects a supervised
+Scout loader; no observation occurs until the tab is explicitly selected. One
+snapshot belongs to the exact selected row and binding. Refresh replaces state
+before I/O, and responses match the attempt's state pointer, not a row position.
+Navigation cancels pending reads. A local expiry message updates the stale label
+without polling. Process-session shutdown cancels and waits for child reaping.
+The two-GET bound is the provider's live read, not a limit on all browsing,
+ConfigHub metadata queries, or authentication helper traffic. Details and proof
+are in [resource-evidence.md](resource-evidence.md).
 
 - Labels are the topology. Anything that assumes a label lives on the unit is wrong for real
   orgs; use `catalog.Live.Coverage` to pick `Labels.k` vs `Space.Labels.k` (see `presets()`).

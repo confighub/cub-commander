@@ -24,6 +24,7 @@ import (
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
 	"github.com/confighub/cub-commander/internal/rollout"
+	"github.com/confighub/cub-commander/internal/scout"
 )
 
 type mode int
@@ -90,12 +91,16 @@ type Model struct {
 	drawerItems  []history.Entry
 
 	// detail
-	det           *detailState
-	dataLoader    DataLoader
-	dataSaver     DataSaver
-	revLoader     RevLoader
-	revDataLoader RevDataLoader
-	textFrom      mode
+	det                *detailState
+	dataLoader         DataLoader
+	dataSaver          DataSaver
+	revLoader          RevLoader
+	revDataLoader      RevDataLoader
+	textFrom           mode
+	scoutConfig        scout.Config
+	evidenceLoader     scout.Loader
+	evidenceContext    context.Context
+	evidenceGeneration uint64
 
 	// rollout
 	rollGen       int
@@ -193,10 +198,34 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var previous *evidenceState
+	if m.det != nil {
+		previous = m.det.evidence
+	}
+	model, cmd := m.update(msg)
+	next := model.(Model)
+	_, quitting := msg.(tea.QuitMsg)
+	if previous != nil && (quitting || !next.evidenceVisible() || next.det.evidence != previous) {
+		previous.stop()
+	}
+	return next, cmd
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case evidenceMsg:
+		return m, m.evidenceLoaded(msg)
+	case evidenceExpiredMsg:
+		if m.evidenceVisible() && m.det.evidence != nil && m.det.evidence.generation == msg.generation {
+			m.renderEvidencePreservingScroll()
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
+		if m.evidenceVisible() {
+			m.renderEvidencePreservingScroll()
+		}
 		return m, nil
 	case tea.KeyboardEnhancementsMsg:
 		m.kitty = msg.SupportsKeyDisambiguation()
@@ -380,6 +409,9 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// the editor does not use (ctrl+a/e/f/b/k/u/w/d/n/p/t/v are readline).
 	switch s {
 	case "ctrl+c", "ctrl+q":
+		if m.det != nil {
+			m.det.evidence.stop()
+		}
 		return m, tea.Quit
 	case "ctrl+/", "ctrl+_":
 		m.helpOpen = !m.helpOpen

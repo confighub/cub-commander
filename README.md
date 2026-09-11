@@ -5,6 +5,28 @@ language over the server's real primitives (list + where, Filters, Views, functi
 `EXPLAIN` printing the equivalent `cub` command. SQL SELECT is accepted as an on-ramp. Design in `docs/design.md`, milestones
 in `docs/roadmap.md`.
 
+### Resource evidence (unreleased)
+
+| User question | Surface | Evidence and limits |
+|---|---|---|
+| Can I inspect the live object behind this selected configuration resource? | Resource detail, `3 Evidence` | An explicit Target ID to kube-context binding and an exact API version, kind, namespace and name. No automatic cluster selection. |
+| What did the observer actually read? | Evidence JSON and displayed command | One discovery document and one object GET per successful cold read. Ownership, object-local readiness, observed source metadata and omissions, not a desired/live diff or proof of deployment success. |
+| Will navigating tabs keep hitting my cluster? | Captured snapshot, `r` refresh | Tab revisits reuse the selected snapshot without requests. Capture/expiry timestamps and `STALE` label remain visible; refresh discards the old success before reading. No background polling. |
+| Can a missing binding or failed read look healthy? | Unavailable state | Missing identity/binding prevents execution. Failed, incompatible and mismatched responses are unavailable; no guessed source links or healthy fallback. |
+
+Requires a Scout build containing the bounded `explain` contract (planned v2.10;
+v2.9.0 does not include it). Start with an explicit binding:
+
+```sh
+cub commander --scout-binding '<target-id>=<kube-context>'
+# Or use a locally built standalone provider:
+cub commander --scout-binary /absolute/path/to/cub-scout --scout-binding '<target-id>=<kube-context>'
+```
+
+Open a Resource row and select `3 Evidence`; `r` refreshes. This tab is read-only;
+existing Data editing and rollout actions are separate. See
+[resource evidence](docs/resource-evidence.md) for scope, examples and proof.
+
 ## Install
 
 You need [`cub`](https://docs.confighub.com) logged in (`cub auth login`).
@@ -23,8 +45,9 @@ cd cub-commander
 make plugin        # builds and runs: cub plugin install ./bin/cub-commander
 ```
 
-Everything is read-only against your ConfigHub org, with one exception: `e` on a unit's
-Data tab opens `$EDITOR` and saves your edit as a new revision, guarded by the hash you read. The first screen is the "browse by"
+Queries and the Evidence tab are read-only. `e` on a unit's Data tab opens `$EDITOR`
+and saves your edit as a new revision, guarded by the hash you read; rollout
+promotion and release are separate, confirmation-gated writes. The first screen is the "browse by"
 chooser; `^/` shows the keys. This is an early lab, so expect rough edges and a moving
 language; the design is in `docs/design.md`.
 

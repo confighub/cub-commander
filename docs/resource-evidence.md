@@ -17,7 +17,7 @@ cub commander --scout-binding 'target-a=context-a' --scout-binding 'target-b=con
 
 In the command area, run `Resource | in *`, focus the results, open one row, and
 select `3 Evidence`. `1` returns to Metadata, `2` to Data, `r` refreshes evidence,
-and Esc leaves detail. `e` does nothing in Evidence; Data editing and rollout
+and Esc leaves detail. `e` does nothing in Evidence; Data editing and change order
 actions retain their existing behavior. The displayed command can also be run
 directly for CLI access to the same evidence.
 

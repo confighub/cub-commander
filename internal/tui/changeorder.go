@@ -10,31 +10,30 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/confighub/cub-commander/internal/changeorder"
 	"github.com/confighub/cub-commander/internal/cubclient"
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
-	"github.com/confighub/cub-commander/internal/rollout"
 )
 
-// Rollout mode shows one ChangeOrder as a rollout: the stage strip, the
+// Change order mode shows one ChangeOrder as a change order: the stage strip, the
 // selected stage's spaces with their taken/released/healthy bits, the gates
 // on the next hop in the CLI's words, and on the right the change itself --
 // per unit, the revision the order's start tag marks against the one its end
 // tag marks -- for the base or for any space that has taken it.
 //
-// The mode is entered by a statement (`ChangeOrder | … | rollout`), so
+// The mode is entered by a statement (`ChangeOrder | … | changeorder`), so
 // history, EXPLAIN and the editor keep working; Enter on a ChangeOrder row
 // in the grid rewrites to it. Esc restores the statement it came from.
-type rolloutState struct {
-	ro     *rollout.Rollout
+type changeOrderState struct {
+	ro     *changeorder.ChangeOrder
 	row    cubclient.Row
-	stage  int  // index into ro.Stages
-	space  int  // index into the selected stage's Spaces
-	scroll int  // first body line shown in the right pane
-	pane   int  // 0: the stage's spaces (↑↓ pick a space); 1: the diff (↑↓ scroll it). Tab toggles.
-	raw    bool // w: diff the text as stored instead of the canonical re-encoding
+	stage  int // index into ro.Stages
+	space  int // index into the selected stage's Spaces
+	scroll int // first body line shown in the right pane
+	pane   int // 0: the stage's spaces (↑↓ pick a space); 1: the diff (↑↓ scroll it). Tab toggles.
 	// dry runs per stage index, loaded on demand
-	previews       map[int]*rollout.Preview
+	previews       map[int]*changeorder.Preview
 	previewPending map[int]bool
 	previewErrs    map[int]string
 	confirm        *confirmState // the write waiting for y
@@ -43,102 +42,102 @@ type rolloutState struct {
 	readAt         time.Time // when this reading was taken
 	gen            int       // identifies this reading to its auto-refresh tick
 	// the change per space, keyed by SpaceID; loaded on demand
-	changes map[string][]rollout.UnitChange
+	changes map[string][]changeorder.UnitChange
 	pending map[string]bool
 	errs    map[string]string
-	// the statement the rollout was opened from, restored on Esc
+	// the statement the change order was opened from, restored on Esc
 	fromStmt *lang.SelectStmt
 	fromPlan *plan.Plan
 }
 
-// ChangeLoader reads what a change order did in one space (rollout.Change,
-// annotated with the ordered change's fields it kept: rollout.WithKept).
-type ChangeLoader func(ctx context.Context, ro *rollout.Rollout, spaceID string) ([]rollout.UnitChange, error)
+// ChangeLoader reads what a change order did in one space (changeorder.ChangeIn:
+// the server's diff, annotated with the ordered change's fields it kept).
+type ChangeLoader func(ctx context.Context, ro *changeorder.ChangeOrder, spaceID string) ([]changeorder.UnitChange, error)
 
-type rolloutMsg struct {
+type changeOrderMsg struct {
 	src   string
 	stmt  *lang.SelectStmt
 	plan  *plan.Plan
-	ro    *rollout.Rollout
+	ro    *changeorder.ChangeOrder
 	row   cubclient.Row
 	quiet bool // an auto-refresh tick: keep what was loaded on top of the reading
 }
 
 type changeMsg struct {
 	orderID, spaceID string
-	changes          []rollout.UnitChange
+	changes          []changeorder.UnitChange
 	err              error
 }
 
-// rolloutRefreshEvery is the auto-refresh period in rollout mode: gates are
+// changeOrderRefreshEvery is the auto-refresh period in change order mode: gates are
 // read live and the thing people wait for (a release, argobot's report)
 // happens elsewhere, so the screen must not sit on a stale reading.
-var rolloutRefreshEvery = 10 * time.Second
+var changeOrderRefreshEvery = 10 * time.Second
 
-type rolloutTickMsg struct{ gen int }
+type changeOrderTickMsg struct{ gen int }
 
-func (m *Model) rolloutLoaded(msg rolloutMsg) tea.Cmd {
+func (m *Model) changeOrderLoaded(msg changeOrderMsg) tea.Cmd {
 	m.running = false
 	m.chooserOpen = false
-	m.rollGen++
-	rs := &rolloutState{ro: msg.ro, row: msg.row, changes: map[string][]rollout.UnitChange{}, pending: map[string]bool{}, errs: map[string]string{},
-		previews: map[int]*rollout.Preview{}, previewPending: map[int]bool{}, previewErrs: map[int]string{}}
+	m.orderGen++
+	rs := &changeOrderState{ro: msg.ro, row: msg.row, changes: map[string][]changeorder.UnitChange{}, pending: map[string]bool{}, errs: map[string]string{},
+		previews: map[int]*changeorder.Preview{}, previewPending: map[int]bool{}, previewErrs: map[int]string{}}
 	var report, reportTitle string
-	if m.roll != nil && m.mode == modeRollout {
-		rs.fromStmt, rs.fromPlan = m.roll.fromStmt, m.roll.fromPlan
+	if m.order != nil && m.mode == modeChangeOrder {
+		rs.fromStmt, rs.fromPlan = m.order.fromStmt, m.order.fromPlan
 		// a refresh keeps the position; a write's report is shown now
-		rs.stage, rs.space, rs.pane, rs.raw = m.roll.stage, m.roll.space, m.roll.pane, m.roll.raw
-		report, reportTitle = m.roll.report, m.roll.reportTitle
-		if msg.quiet && m.roll.ro.Order.ID == msg.ro.Order.ID {
-			// the quiet tick re-reads the rollout (gates, health, taken) but keeps
+		rs.stage, rs.space, rs.pane = m.order.stage, m.order.space, m.order.pane
+		report, reportTitle = m.order.report, m.order.reportTitle
+		if msg.quiet && m.order.ro.Order.ID == msg.ro.Order.ID {
+			// the quiet tick re-reads the change order (gates, health, taken) but keeps
 			// the dry runs and diffs: they are slow, and re-running them redrew the
 			// pane every period. R, or a write, runs them again.
-			rs.previews, rs.previewErrs, rs.previewPending = m.roll.previews, m.roll.previewErrs, m.roll.previewPending
-			rs.changes, rs.errs, rs.pending = m.roll.changes, m.roll.errs, m.roll.pending
+			rs.previews, rs.previewErrs, rs.previewPending = m.order.previews, m.order.previewErrs, m.order.previewPending
+			rs.changes, rs.errs, rs.pending = m.order.changes, m.order.errs, m.order.pending
 		}
 	} else {
 		rs.fromStmt, rs.fromPlan = m.stmt, m.plan
 		rs.stage = max(msg.ro.Next, 0)
 	}
-	if msg.plan.Rollout != nil && msg.plan.Rollout.Stage != "" {
+	if msg.plan.ChangeOrder != nil && msg.plan.ChangeOrder.Stage != "" {
 		for i, st := range msg.ro.Stages {
-			if strings.EqualFold(st.Name, msg.plan.Rollout.Stage) {
+			if strings.EqualFold(st.Name, msg.plan.ChangeOrder.Stage) {
 				rs.stage = i
 			}
 		}
 	}
 	rs.clamp()
-	rs.readAt, rs.gen = time.Now(), m.rollGen
-	m.roll = rs
+	rs.readAt, rs.gen = time.Now(), m.orderGen
+	m.order = rs
 	m.stmt, m.plan = msg.stmt, msg.plan
-	m.mode = modeRollout
+	m.mode = modeChangeOrder
 	m.focus = focusMain
 	if msg.src != "" {
 		m.record(msg.src, len(msg.ro.Stages), "")
 	}
 	m.setStatus(fmt.Sprintf("%s · %s", msg.ro.State, msg.ro.Blocker), false)
 	gen := rs.gen
-	cmd := tea.Batch(m.changeFetch(), m.previewFetch(), tea.Tick(rolloutRefreshEvery, func(time.Time) tea.Msg { return rolloutTickMsg{gen: gen} }))
+	cmd := tea.Batch(m.changeFetch(), m.previewFetch(), tea.Tick(changeOrderRefreshEvery, func(time.Time) tea.Msg { return changeOrderTickMsg{gen: gen} }))
 	if report != "" {
 		m.showText(reportTitle, report)
 	}
 	return cmd
 }
 
-// rolloutTick re-reads the rollout quietly: no loading panel, position kept.
+// changeOrderTick re-reads the change order quietly: no loading panel, position kept.
 // Skipped when the reading it was scheduled for is gone, a write is waiting
 // for confirmation, or a statement is running.
-func (m Model) rolloutTick(msg rolloutTickMsg) (tea.Model, tea.Cmd) {
-	rs := m.roll
+func (m Model) changeOrderTick(msg changeOrderTickMsg) (tea.Model, tea.Cmd) {
+	rs := m.order
 	if rs == nil || rs.gen != msg.gen || m.stmt == nil || m.running {
 		return m, nil
 	}
-	if m.mode != modeRollout && !(m.mode == modeText && m.textFrom == modeRollout) {
+	if m.mode != modeChangeOrder && !(m.mode == modeText && m.textFrom == modeChangeOrder) {
 		return m, nil
 	}
 	if rs.confirm != nil {
 		gen := rs.gen
-		return m, tea.Tick(rolloutRefreshEvery, func(time.Time) tea.Msg { return rolloutTickMsg{gen: gen} })
+		return m, tea.Tick(changeOrderRefreshEvery, func(time.Time) tea.Msg { return changeOrderTickMsg{gen: gen} })
 	}
 	runner, st, sess := m.runner, m.stmt, m.sess
 	return m, func() tea.Msg {
@@ -146,7 +145,7 @@ func (m Model) rolloutTick(msg rolloutTickMsg) (tea.Model, tea.Cmd) {
 		if err != nil {
 			return errMsg{err: err}
 		}
-		if r, ok := out.(rolloutMsg); ok {
+		if r, ok := out.(changeOrderMsg); ok {
 			r.quiet = true
 			return r // src empty: not recorded in history again
 		}
@@ -154,7 +153,7 @@ func (m Model) rolloutTick(msg rolloutTickMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (rs *rolloutState) clamp() {
+func (rs *changeOrderState) clamp() {
 	if rs.stage < 0 {
 		rs.stage = 0
 	}
@@ -170,9 +169,9 @@ func (rs *rolloutState) clamp() {
 	}
 }
 
-func (rs *rolloutState) selectedStage() *rollout.StageState { return &rs.ro.Stages[rs.stage] }
+func (rs *changeOrderState) selectedStage() *changeorder.StageState { return &rs.ro.Stages[rs.stage] }
 
-func (rs *rolloutState) selectedSpace() *rollout.Space {
+func (rs *changeOrderState) selectedSpace() *changeorder.Space {
 	st := rs.selectedStage()
 	if rs.space < len(st.Spaces) {
 		return &st.Spaces[rs.space]
@@ -183,7 +182,7 @@ func (rs *rolloutState) selectedSpace() *rollout.Space {
 // changeFetch loads the change for the selected space when it has taken the
 // order (the base always has) and it is not loaded yet.
 func (m *Model) changeFetch() tea.Cmd {
-	rs := m.roll
+	rs := m.order
 	if rs == nil || m.changeLoader == nil {
 		return nil
 	}
@@ -206,7 +205,7 @@ func (m *Model) changeFetch() tea.Cmd {
 }
 
 func (m *Model) changeLoaded(msg changeMsg) {
-	rs := m.roll
+	rs := m.order
 	if rs == nil || rs.ro.Order.ID != msg.orderID {
 		return
 	}
@@ -228,8 +227,8 @@ func keyName(k tea.KeyPressMsg) string {
 	return s
 }
 
-func (m Model) rolloutKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	rs := m.roll
+func (m Model) changeOrderKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	rs := m.order
 	if rs == nil {
 		return m, nil
 	}
@@ -273,32 +272,23 @@ func (m Model) rolloutKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.changeFetch(), m.previewFetch())
 	case "pgdown", " ":
 		rs.pane = 1
-		rs.scroll += m.rolloutPaneHeight() - 2
+		rs.scroll += m.changeOrderPaneHeight() - 2
 		return m, nil
 	case "pgup":
 		rs.pane = 1
-		rs.scroll = max(0, rs.scroll-(m.rolloutPaneHeight()-2))
+		rs.scroll = max(0, rs.scroll-(m.changeOrderPaneHeight()-2))
 		return m, nil
 	case "home":
 		rs.scroll = 0
 		return m, nil
-	case "w":
-		rs.raw = !rs.raw
-		rs.scroll = 0
-		if rs.raw {
-			m.setStatus("diffing the text as stored (w returns to the field view)", false)
-		} else {
-			m.setStatus("diffing fields; layout changes hidden (w shows the raw text)", false)
-		}
-		return m, nil
 	case "enter":
-		title, body := m.rolloutChangeText(0)
+		title, body := m.changeOrderChangeText(0)
 		m.showText(title, body)
 		return m, nil
 	case "R":
 		if m.stmt != nil {
 			// a refresh re-reads everything, previews included
-			rs.previews, rs.previewErrs = map[int]*rollout.Preview{}, map[int]string{}
+			rs.previews, rs.previewErrs = map[int]*changeorder.Preview{}, map[int]string{}
 			return m.execute(lang.StmtString(m.stmt))
 		}
 	case "s":
@@ -308,7 +298,7 @@ func (m Model) rolloutKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "i", "1":
 		m.openDetailRow(rs.row)
 		if m.det != nil {
-			m.det.from = modeRollout
+			m.det.from = modeChangeOrder
 		}
 		return m, nil
 	case "?":
@@ -320,11 +310,11 @@ func (m Model) rolloutKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// rolloutBack leaves the mode: the statement it was opened from comes back.
-func (m *Model) rolloutBack() {
-	m.rollGen++ // stops the auto-refresh
-	if m.roll != nil && m.roll.fromStmt != nil {
-		m.stmt, m.plan = m.roll.fromStmt, m.roll.fromPlan
+// changeOrderBack leaves the mode: the statement it was opened from comes back.
+func (m *Model) changeOrderBack() {
+	m.orderGen++ // stops the auto-refresh
+	if m.order != nil && m.order.fromStmt != nil {
+		m.stmt, m.plan = m.order.fromStmt, m.order.fromPlan
 		m.cmd.SetValue(lang.StmtString(m.stmt))
 		m.cmd.MoveToEnd()
 		m.layout()
@@ -347,21 +337,21 @@ var (
 
 func stateStyle(state string) lipgloss.Style {
 	switch state {
-	case rollout.StateReady, rollout.StateComplete:
+	case changeorder.StateReady, changeorder.StateComplete:
 		return goodStyle
-	case rollout.StateDegraded, rollout.StateBlocked, rollout.StateAborted:
+	case changeorder.StateDegraded, changeorder.StateBlocked, changeorder.StateAborted:
 		return badStyle
-	case rollout.StateProgressing:
+	case changeorder.StateProgressing:
 		return warnStyle
 	}
 	return dimStyle
 }
 
-func (m Model) rolloutView() string {
+func (m Model) changeOrderView() string {
 	w, h := m.mainWidth(), m.mainHeight()
-	rs := m.roll
+	rs := m.order
 	if rs == nil {
-		return dimStyle.Render("no rollout open")
+		return dimStyle.Render("no change order open")
 	}
 	ro := rs.ro
 	var b strings.Builder
@@ -393,16 +383,16 @@ func (m Model) rolloutView() string {
 		}
 		sub = fmt.Sprintf(" workflow %s · component %s · %d of %d spaces still to take it", ro.WorkflowRef, ro.Component, toGo, len(ro.Order.InScope)-1)
 	}
-	sub += fmt.Sprintf(" · read %s, re-read every %ds; R re-runs the dry run", rs.readAt.Format("15:04:05"), int(rolloutRefreshEvery.Seconds()))
+	sub += fmt.Sprintf(" · read %s, re-read every %ds; R re-runs the dry run", rs.readAt.Format("15:04:05"), int(changeOrderRefreshEvery.Seconds()))
 	if ro.Err != "" {
 		sub += "  " + errStyle.Render(ro.Err)
 	}
 	b.WriteString(dimStyle.Render(lipgloss.NewStyle().MaxWidth(w).Render(sub)) + "\n\n")
 
 	// strip
-	b.WriteString(m.rolloutStrip(w) + "\n")
+	b.WriteString(m.changeOrderStrip(w) + "\n")
 
-	paneH := m.rolloutPaneHeight()
+	paneH := m.changeOrderPaneHeight()
 	if rs.confirm != nil {
 		b.WriteString(m.confirmView(w, paneH))
 		return lipgloss.NewStyle().Width(w).Height(h).MaxWidth(w).MaxHeight(h).Render(b.String())
@@ -412,23 +402,23 @@ func (m Model) rolloutView() string {
 		lw = min(30, w)
 	}
 	rw := w - lw - 1
-	left := lipgloss.NewStyle().Width(lw).Height(paneH).MaxWidth(lw).MaxHeight(paneH).Render(m.rolloutLeft(lw, paneH))
-	rightPane := lipgloss.NewStyle().Width(rw).Height(paneH).MaxWidth(rw).MaxHeight(paneH).Render(m.rolloutRight(rw, paneH))
+	left := lipgloss.NewStyle().Width(lw).Height(paneH).MaxWidth(lw).MaxHeight(paneH).Render(m.changeOrderLeft(lw, paneH))
+	rightPane := lipgloss.NewStyle().Width(rw).Height(paneH).MaxWidth(rw).MaxHeight(paneH).Render(m.changeOrderRight(rw, paneH))
 	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, " ", rightPane))
 	return lipgloss.NewStyle().Width(w).Height(h).MaxWidth(w).MaxHeight(h).Render(b.String())
 }
 
-// rolloutPaneHeight is the height left for the two panes under the header
+// changeOrderPaneHeight is the height left for the two panes under the header
 // and the strip (two header lines, a blank, five strip lines).
-func (m Model) rolloutPaneHeight() int {
+func (m Model) changeOrderPaneHeight() int {
 	return max(m.mainHeight()-8, 3)
 }
 
-// rolloutStrip draws the stages as columns: taken / released / healthy per
+// changeOrderStrip draws the stages as columns: taken / released / healthy per
 // stage, the selected stage highlighted, the next stage marked with the gate
 // tally in the CLI's words.
-func (m Model) rolloutStrip(w int) string {
-	rs := m.roll
+func (m Model) changeOrderStrip(w int) string {
+	rs := m.order
 	ro := rs.ro
 	names := []string{}
 	for _, st := range ro.Stages {
@@ -498,13 +488,16 @@ func (m Model) rolloutStrip(w int) string {
 		b.WriteString(" " + dimStyle.Render(fmt.Sprintf("%-10s", r[0])) + strings.Join(r[1:], "") + "\n")
 	}
 	// the next hop and its gates, one line
-	ok, total := rollout.Tally(ro.Gates)
+	ok, total := changeorder.Tally(ro.Gates)
 	switch {
 	case ro.Workflow == nil:
 		b.WriteString(" " + dimStyle.Render(ro.Blocker))
 	case ro.Next > 0:
 		line := fmt.Sprintf(" next: %s · gates %d of %d satisfied", ro.NextName(), ok, total)
-		if ro.Blocker != rollout.NoBlocker {
+		if total == 0 {
+			line = fmt.Sprintf(" next: %s · no gates on the first stage", ro.NextName())
+		}
+		if ro.Blocker != changeorder.NoBlocker {
 			line += " · " + ro.Blocker
 		} else {
 			line += " · promote is open"
@@ -530,11 +523,11 @@ func countStyle(n, of int) lipgloss.Style {
 	return warnStyle
 }
 
-// rolloutLeft lists the selected stage's spaces with their bits, then the
+// changeOrderLeft lists the selected stage's spaces with their bits, then the
 // gates: the next stage's entry gates when that stage is selected, else the
 // stage's own prerequisites.
-func (m Model) rolloutLeft(w, h int) string {
-	rs := m.roll
+func (m Model) changeOrderLeft(w, h int) string {
+	rs := m.order
 	ro := rs.ro
 	st := rs.selectedStage()
 	var lines []string
@@ -582,6 +575,13 @@ func (m Model) rolloutLeft(w, h int) string {
 		}
 		if sp := rs.selectedSpace(); sp != nil && sp.Health.Present {
 			obs := sp.Health.Status
+			if sp.Health.Sync != "" && sp.Health.Sync != "Synced" {
+				obs += ", " + sp.Health.Sync
+			}
+			if sp.Health.Operation == "Running" || sp.Health.Operation == "Failed" {
+				obs += ", operation " + strings.ToLower(sp.Health.Operation)
+			}
+			obs += fmt.Sprintf(" (release %d)", sp.Health.ReleaseNum)
 			if sp.Health.ObservedAt != "" {
 				obs += " at " + sp.Health.ObservedAt
 			}
@@ -598,40 +598,39 @@ func (m Model) rolloutLeft(w, h int) string {
 	if ro.Workflow != nil {
 		switch {
 		case rs.stage == ro.Next:
-			ok, total := rollout.Tally(ro.Gates)
-			lines = append(lines, titleStyle.Render(fmt.Sprintf("gates on %s: %d of %d satisfied", st.Name, ok, total)))
-			for _, g := range ro.Gates {
-				if g.OK {
-					reason := g.Reason
-					if reason == "" {
-						reason = g.Name
-					}
-					lines = append(lines, " "+goodStyle.Render("✓")+" "+reason)
-				} else {
-					lines = append(lines, " "+badStyle.Render("✗")+" "+g.Reason)
-				}
+			ok, total := changeorder.Tally(ro.Gates)
+			if total == 0 {
+				lines = append(lines, titleStyle.Render("gates on "+st.Name+": none"), dimStyle.Render("the first stage has no previous stage to gate on"))
+				break
 			}
+			lines = append(lines, titleStyle.Render(fmt.Sprintf("gates on %s: %d of %d satisfied", st.Name, ok, total)))
+			lines = append(lines, gateLines(ro.Gates)...)
 		case !st.Source && rs.stage > 0:
 			pre := strings.Join(st.Prerequisites, ", ")
 			if pre == "" {
-				pre = "none beyond taken"
+				pre = "none beyond Promoted"
+			} else {
+				pre = "Promoted, " + pre
 			}
-			lines = append(lines, dimStyle.Render("entry gates: taken, "+pre))
+			lines = append(lines, dimStyle.Render("entry gates: "+pre))
+			if rel := strings.Join(st.ReleasePrerequisites, ", "); rel != "" {
+				lines = append(lines, dimStyle.Render("release gates: "+rel))
+			}
 		}
 	}
 	return strings.Join(lines, "\n")
 }
 
-// rolloutRight shows the change for the selected space, scrolled by
+// changeOrderRight shows the change for the selected space, scrolled by
 // PgUp/PgDn, with a footer saying how much is out of view.
-func (m Model) rolloutRight(w, h int) string {
-	title, body := m.rolloutChangeText(w)
+func (m Model) changeOrderRight(w, h int) string {
+	title, body := m.changeOrderChangeText(w)
 	lines := strings.Split(body, "\n")
 	avail := h - 2 // title and footer
 	if avail < 1 {
 		avail = 1
 	}
-	rs := m.roll
+	rs := m.order
 	if rs.scroll > len(lines)-avail {
 		rs.scroll = max(0, len(lines)-avail)
 	}
@@ -652,9 +651,34 @@ func (m Model) rolloutRight(w, h int) string {
 	return paneTitle(title, rs.pane == 1) + "\n" + strings.Join(shown, "\n") + "\n" + footer
 }
 
+// gateLines renders the server's gates: the pairs that hold in one dim line
+// per prerequisite, each failing one on its own with the server's reason.
+func gateLines(gates []changeorder.Gate) []string {
+	var lines []string
+	held := map[string][]string{}
+	var order []string
+	for _, g := range gates {
+		if !g.OK {
+			lines = append(lines, " "+badStyle.Render("✗")+" "+g.Reason)
+			continue
+		}
+		if _, ok := held[g.Name]; !ok {
+			order = append(order, g.Name)
+		}
+		held[g.Name] = append(held[g.Name], firstNonEmpty(g.Space, g.Reason))
+	}
+	for _, name := range order {
+		lines = append(lines, " "+goodStyle.Render("✓")+" "+name+dimStyle.Render(" · "+strings.Join(held[name], ", ")))
+	}
+	return lines
+}
+
 // fieldLine renders one changed field: path, then old → new in diff colours.
-func fieldLine(f rollout.FieldChange) string {
+func fieldLine(f changeorder.FieldChange) string {
 	p := f.Path
+	if p == "" {
+		p = "(whole resource)"
+	}
 	if f.Doc != "" {
 		p = dimStyle.Render(f.Doc+" ") + p
 	}
@@ -675,10 +699,10 @@ func paneTitle(s string, focused bool) string {
 	return titleStyle.Render(" " + s)
 }
 
-// rolloutChangeText renders the selected space's change: the diff per touched
+// changeOrderChangeText renders the selected space's change: the diff per touched
 // unit, then the untouched units. width 0 means unbounded (the text view).
-func (m Model) rolloutChangeText(w int) (string, string) {
-	rs := m.roll
+func (m Model) changeOrderChangeText(w int) (string, string) {
+	rs := m.order
 	sp := rs.selectedSpace()
 	if sp == nil {
 		return "no space selected", ""
@@ -708,7 +732,11 @@ func (m Model) rolloutChangeText(w int) (string, string) {
 			untouched = append(untouched, u.Slug)
 			continue
 		}
-		head := titleStyle.Render(u.Slug) + dimStyle.Render(fmt.Sprintf("  rev %d → %d", u.StartRev, u.EndRev))
+		revs := fmt.Sprintf("  rev %d → %d", u.StartRev, u.EndRev)
+		if u.StartRev == 0 {
+			revs = fmt.Sprintf("  new here, at rev %d", u.EndRev)
+		}
+		head := titleStyle.Render(u.Slug) + dimStyle.Render(revs)
 		if !u.Touched {
 			head = titleStyle.Render(u.Slug) + dimStyle.Render("  · nothing changed") + warnStyle.Render(fmt.Sprintf("  · %d kept", len(u.Kept)))
 			out = append(out, head)
@@ -725,18 +753,11 @@ func (m Model) rolloutChangeText(w int) (string, string) {
 			out = append(out, head, errStyle.Render(u.Err))
 			continue
 		}
-		labelA, labelB := fmt.Sprintf("%s @%d", u.Slug, u.StartRev), fmt.Sprintf("%s @%d", u.Slug, u.EndRev)
-		if rs.raw {
-			out = append(out, head+dimStyle.Render("  · raw text"))
-			out = append(out, keptLines(u.Kept, w)...)
-			out = append(out, renderUnified(u.Before, u.After, labelA, labelB), "")
+		switch len(u.Fields) {
+		case 0:
+			out = append(out, head+dimStyle.Render("  · no field differs"), dimStyle.Render("the revisions differ in layout only"), "")
 			continue
-		}
-		switch {
-		case u.FormattingOnly:
-			out = append(out, head+dimStyle.Render("  · layout only"), dimStyle.Render("no field changed; the text differs in indentation or quoting only (w shows it)"), "")
-			continue
-		case len(u.Fields) == 1:
+		case 1:
 			head += dimStyle.Render("  · 1 field")
 		default:
 			head += dimStyle.Render(fmt.Sprintf("  · %d fields", len(u.Fields)))
@@ -744,7 +765,7 @@ func (m Model) rolloutChangeText(w int) (string, string) {
 		out = append(out, head)
 		out = append(out, fieldLines(u.Fields, w)...)
 		out = append(out, keptLines(u.Kept, w)...)
-		out = append(out, "", renderUnified(u.NormBefore, u.NormAfter, labelA, labelB), "")
+		out = append(out, "")
 	}
 	if len(out) == 0 {
 		out = append(out, dimStyle.Render("no unit changed here"))
@@ -759,22 +780,22 @@ func (m Model) rolloutChangeText(w int) (string, string) {
 	return title, body
 }
 
-// RolloutRunner turns the list rows of a ChangeOrder statement into a
-// rollout message (rollout step) or enriches them with the computed columns.
+// ChangeOrderRunner turns the list rows of a ChangeOrder statement into a
+// change order message (change order step) or enriches them with the computed columns.
 // Shared by the real runner and the test stubs.
-func RolloutRunner(ctx context.Context, c rollout.Client, st *lang.SelectStmt, p *plan.Plan, rows []cubclient.Row) (tea.Msg, error) {
-	cache := rollout.NewCache() // per run: live status must not go stale across refreshes
-	if p.Rollout != nil {
+func ChangeOrderRunner(ctx context.Context, c changeorder.Client, st *lang.SelectStmt, p *plan.Plan, rows []cubclient.Row) (tea.Msg, error) {
+	cache := changeorder.NewCache() // per run: live status must not go stale across refreshes
+	if p.ChangeOrder != nil {
 		if len(rows) != 1 {
-			return nil, fmt.Errorf("rollout opens one change order; the where steps matched %d", len(rows))
+			return nil, fmt.Errorf("the changeorder step opens one change order; the where steps matched %d", len(rows))
 		}
-		ro, err := rollout.Load(ctx, c, cache, rows[0])
+		ro, err := changeorder.Load(ctx, c, cache, rows[0])
 		if err != nil {
 			return nil, err
 		}
-		return rolloutMsg{stmt: st, plan: p, ro: ro, row: rows[0]}, nil
+		return changeOrderMsg{stmt: st, plan: p, ro: ro, row: rows[0]}, nil
 	}
-	if p.RolloutCols {
+	if p.ChangeOrderCols {
 		// One derivation per order, a few at a time: each is several round
 		// trips, and the orders do not depend on each other.
 		sem := make(chan struct{}, 6)
@@ -785,12 +806,12 @@ func RolloutRunner(ctx context.Context, c rollout.Client, st *lang.SelectStmt, p
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				ro, err := rollout.Load(ctx, c, cache, row)
+				ro, err := changeorder.Load(ctx, c, cache, row)
 				if err != nil {
-					row["Rollout"] = map[string]any{"state": rollout.StateUnknown, "stage": "", "next": "", "blocker": err.Error()}
+					row["Reading"] = map[string]any{"state": changeorder.StateUnknown, "stage": "", "next": "", "blocker": err.Error()}
 					return
 				}
-				row["Rollout"] = map[string]any{"state": ro.State, "stage": ro.Reached(), "next": ro.NextName(), "blocker": ro.Blocker}
+				row["Reading"] = map[string]any{"state": ro.State, "stage": ro.Reached(), "next": ro.NextName(), "blocker": ro.Blocker}
 			}(row)
 		}
 		wg.Wait()
@@ -798,22 +819,22 @@ func RolloutRunner(ctx context.Context, c rollout.Client, st *lang.SelectStmt, p
 	return nil, nil
 }
 
-// RolloutsPreset is the chooser's rollouts-in-flight statement.
-const RolloutsPreset = "ChangeOrder | in * | where State IN ('New', 'InProgress', 'Resolved') | columns Slug, Space.Slug, state(), stage(), next(), blocker(), CreatedAt | order by CreatedAt desc"
+// ChangeOrdersPreset is the chooser's change orders-in-flight statement.
+const ChangeOrdersPreset = "ChangeOrder | in * | where State IN ('New', 'InProgress', 'Resolved') | columns Slug, Space.Slug, state(), stage(), next(), blocker(), CreatedAt | order by CreatedAt desc"
 
 // ---- preview and promote
 
-// PreviewLoader dry-runs a stage (rollout.PreviewStage); Promoter runs it;
-// Releaser publishes it (rollout.ReleaseStage), after the given promote
+// PreviewLoader dry-runs a stage (changeorder.PreviewStage); Promoter runs it;
+// Releaser publishes it (changeorder.ReleaseStage), after the given promote
 // outcomes when B ran both.
-type PreviewLoader func(ctx context.Context, ro *rollout.Rollout, stage int) (*rollout.Preview, error)
-type Promoter func(ctx context.Context, ro *rollout.Rollout, stage int) ([]rollout.Outcome, error)
-type Releaser func(ctx context.Context, ro *rollout.Rollout, stage int, promoted []rollout.Outcome) ([]rollout.ReleaseOutcome, error)
+type PreviewLoader func(ctx context.Context, ro *changeorder.ChangeOrder, stage int) (*changeorder.Preview, error)
+type Promoter func(ctx context.Context, ro *changeorder.ChangeOrder, stage int, expectedPlan string) ([]changeorder.Outcome, error)
+type Releaser func(ctx context.Context, ro *changeorder.ChangeOrder, stage int, promoted []changeorder.Outcome) ([]changeorder.ReleaseOutcome, error)
 
 type previewMsg struct {
 	orderID string
 	stage   int
-	p       *rollout.Preview
+	p       *changeorder.Preview
 	err     error
 }
 
@@ -838,7 +859,7 @@ type confirmState struct {
 // previewFetch dry-runs the selected stage when its selected space has not
 // taken the change and no preview is loaded yet.
 func (m *Model) previewFetch() tea.Cmd {
-	rs := m.roll
+	rs := m.order
 	if rs == nil || m.previewLoader == nil || rs.stage == 0 || rs.ro.Workflow == nil {
 		return nil
 	}
@@ -861,7 +882,7 @@ func (m *Model) previewFetch() tea.Cmd {
 }
 
 func (m *Model) previewLoaded(msg previewMsg) {
-	rs := m.roll
+	rs := m.order
 	if rs == nil || rs.ro.Order.ID != msg.orderID {
 		return
 	}
@@ -875,7 +896,7 @@ func (m *Model) previewLoaded(msg previewMsg) {
 
 // previewText renders the dry run for the selected space.
 func (m Model) previewText(w int) (string, string) {
-	rs := m.roll
+	rs := m.order
 	sp := rs.selectedSpace()
 	st := rs.selectedStage()
 	title := "what this promotes to " + sp.Slug
@@ -892,73 +913,103 @@ func (m Model) previewText(w int) (string, string) {
 		}
 		return title, dimStyle.Render("…")
 	}
-	var spv *rollout.SpacePreview
+	var spv *changeorder.SpacePreview
 	for i := range p.Spaces {
 		if p.Spaces[i].Space.ID == sp.ID {
 			spv = &p.Spaces[i]
 		}
 	}
-	if spv == nil {
-		return title, dimStyle.Render("not part of this stage's preview")
-	}
 	var out []string
-	if spv.Skipped != "" {
-		return title, dimStyle.Render(spv.Skipped)
-	}
-	if spv.Err != "" {
-		return title, errStyle.Render(spv.Err)
-	}
-	if len(spv.Missing) > 0 {
-		out = append(out, badStyle.Render("✗ lacks "+strings.Join(spv.Missing, ", ")+": the upgrade cannot clone units; promote from the CLI, which does"))
-	}
-	var unchanged []string
-	for _, u := range spv.Units {
-		if u.Err != "" {
-			out = append(out, titleStyle.Render(u.Slug)+"  "+errStyle.Render(u.Err))
-			continue
+	switch {
+	case p.Refused:
+		out = append(out, badStyle.Render("the server refused the dry run: the gates on "+p.Stage+" do not hold"))
+		for _, g := range p.Gates {
+			if !g.OK {
+				out = append(out, "  "+badStyle.Render("✗")+" "+g.Reason)
+			}
 		}
-		if u.NoChange && len(u.Kept) == 0 {
-			unchanged = append(unchanged, u.Slug)
-			continue
+		out = append(out, dimStyle.Render("nothing is planned until they do"))
+	case p.Complete:
+		out = append(out, dimStyle.Render("every stage already has this change; the server plans nothing"))
+	case spv == nil:
+		out = append(out, dimStyle.Render("not part of this stage's dry run"))
+	case spv.Skipped != "":
+		out = append(out, dimStyle.Render("skipped: "+spv.Skipped))
+	case spv.Err != "":
+		out = append(out, errStyle.Render(strings.ToLower(spv.Action)+": "+spv.Err))
+	default:
+		var unchanged, added []string
+		for _, u := range spv.Units {
+			if u.Err != "" {
+				out = append(out, titleStyle.Render(u.Slug)+"  "+errStyle.Render(u.Err))
+				continue
+			}
+			if u.New {
+				added = append(added, u.Slug)
+				continue
+			}
+			if u.NoChange && len(u.Kept) == 0 {
+				unchanged = append(unchanged, u.Slug)
+				continue
+			}
+			head := titleStyle.Render(u.Slug)
+			switch {
+			case u.NoChange:
+				head += dimStyle.Render("  · nothing changes")
+			case len(u.Fields) == 1:
+				head += dimStyle.Render("  · 1 field")
+			default:
+				head += dimStyle.Render(fmt.Sprintf("  · %d fields", len(u.Fields)))
+			}
+			if u.Action != "Upgrade" && u.Action != "Mark" && u.Action != "Unchanged" {
+				head += dimStyle.Render("  · " + strings.ToLower(u.Action))
+			}
+			if n := len(u.Kept); n == 1 {
+				head += warnStyle.Render("  · 1 kept")
+			} else if n > 1 {
+				head += warnStyle.Render(fmt.Sprintf("  · %d kept", n))
+			}
+			out = append(out, head)
+			out = append(out, fieldLines(u.Fields, w)...)
+			out = append(out, keptLines(u.Kept, w)...)
+			out = append(out, "")
 		}
-		head := titleStyle.Render(u.Slug)
-		switch {
-		case u.NoChange:
-			head += dimStyle.Render("  · nothing changes")
-		case len(u.Fields) == 1:
-			head += dimStyle.Render("  · 1 field")
-		default:
-			head += dimStyle.Render(fmt.Sprintf("  · %d fields", len(u.Fields)))
+		if len(added) > 0 {
+			out = append(out, addStyle.Render("+ would add from upstream: "+strings.Join(added, ", ")))
 		}
-		if n := len(u.Kept); n == 1 {
-			head += warnStyle.Render("  · 1 kept")
-		} else if n > 1 {
-			head += warnStyle.Render(fmt.Sprintf("  · %d kept", n))
+		if len(out) == 0 {
+			out = append(out, dimStyle.Render("nothing would change here"))
 		}
-		out = append(out, head)
-		out = append(out, fieldLines(u.Fields, w)...)
-		out = append(out, keptLines(u.Kept, w)...)
-		if !u.NoChange {
-			out = append(out, "", renderUnified(u.NormBefore, u.NormAfter, u.Slug+" now", u.Slug+" after promote"))
+		if len(unchanged) > 0 {
+			out = append(out, dimStyle.Render("no change: "+strings.Join(unchanged, ", ")))
 		}
-		out = append(out, "")
-	}
-	if len(out) == 0 {
-		out = append(out, dimStyle.Render("nothing would change here"))
-	}
-	if len(unchanged) > 0 {
-		out = append(out, dimStyle.Render("no change: "+strings.Join(unchanged, ", ")))
+		if l := spv.Links; l.Create+l.Adopted+len(l.Skipped)+len(l.Orphaned) > 0 {
+			parts := []string{}
+			if l.Create > 0 {
+				parts = append(parts, fmt.Sprintf("%d copied from upstream", l.Create))
+			}
+			if l.Adopted > 0 {
+				parts = append(parts, fmt.Sprintf("%d adopted", l.Adopted))
+			}
+			if len(l.Skipped) > 0 {
+				parts = append(parts, "not copied: "+strings.Join(l.Skipped, "; "))
+			}
+			if len(l.Orphaned) > 0 {
+				parts = append(parts, "orphaned: "+strings.Join(l.Orphaned, ", "))
+			}
+			out = append(out, dimStyle.Render("links: "+strings.Join(parts, " · ")))
+		}
 	}
 	gate := ""
 	switch {
 	case rs.stage != rs.ro.Next:
 		gate = dimStyle.Render(fmt.Sprintf("not the next stage (next is %s)", rs.ro.NextName()))
-	case !rollout.Open(rs.ro.Gates):
+	case !changeorder.Open(rs.ro.Gates):
 		gate = badStyle.Render("promote refused: " + rs.ro.Blocker)
 	case len(p.Blockers()) > 0:
-		gate = badStyle.Render("promote refused: " + strings.Join(p.Blockers(), "; "))
+		gate = badStyle.Render("promote would land short: " + strings.Join(p.Blockers(), "; "))
 	default:
-		gate = goodStyle.Render("P promotes this stage")
+		gate = goodStyle.Render("P promotes this stage, exactly as planned (the server refuses if anything has changed)")
 	}
 	out = append(out, "", gate, dimStyle.Render(fmt.Sprintf("  cub variant promote --change-order %s", rs.ro.Order.Ref())),
 		dimStyle.Render(fmt.Sprintf("      --target-stage %s --dry-run -o mutations", st.Name)))
@@ -971,7 +1022,7 @@ func (m Model) previewText(w int) (string, string) {
 
 // keptLines renders the upstream changes this merge will NOT bring, loudly:
 // the space keeps its value, and the reason when a protection is recorded.
-func keptLines(kept []rollout.KeptField, w int) []string {
+func keptLines(kept []changeorder.KeptField, w int) []string {
 	var out []string
 	for _, k := range kept {
 		p := k.Path
@@ -994,33 +1045,50 @@ func keptLines(kept []rollout.KeptField, w int) []string {
 	return out
 }
 
-// fieldLines renders changed fields, wrapping the wide ones.
-func fieldLines(fields []rollout.FieldChange, w int) []string {
+// fieldLines renders changed fields, wrapping the wide ones and laying a
+// multi-line value, or a whole resource, out as a block.
+func fieldLines(fields []changeorder.FieldChange, w int) []string {
 	var out []string
+	block := func(prefix string, style lipgloss.Style, text string) {
+		for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+			out = append(out, "    "+style.Render(prefix+l))
+		}
+	}
 	for _, f := range fields {
 		line := "  " + fieldLine(f)
-		if w > 0 && lipgloss.Width(line) > w-2 {
-			p := f.Path
-			if f.Doc != "" {
-				p = dimStyle.Render(f.Doc+" ") + p
-			}
-			out = append(out, "  "+p)
-			if f.Before != "" {
-				out = append(out, "    "+delStyle.Render("- "+f.Before))
-			}
-			if f.After != "" {
-				out = append(out, "    "+addStyle.Render("+ "+f.After))
-			}
+		if !f.Multiline() && (w <= 0 || lipgloss.Width(line) <= w-2) {
+			out = append(out, line)
 			continue
 		}
-		out = append(out, line)
+		p := f.Path
+		if p == "" {
+			p = "(whole resource)"
+		}
+		if f.Doc != "" {
+			p = dimStyle.Render(f.Doc+" ") + p
+		}
+		if f.Kind != "" {
+			p += dimStyle.Render("  " + strings.ToLower(f.Kind))
+		}
+		out = append(out, "  "+p)
+		switch {
+		case f.Patch != "":
+			block("", lipgloss.NewStyle(), f.Patch)
+		default:
+			if f.Before != "" {
+				block("- ", delStyle, f.Before)
+			}
+			if f.After != "" {
+				block("+ ", addStyle, f.After)
+			}
+		}
 	}
 	return out
 }
 
 // promoteRequest is P: refuse with the reason, or open the confirm overlay.
 func (m Model) promoteRequest() (tea.Model, tea.Cmd) {
-	rs := m.roll
+	rs := m.order
 	ro := rs.ro
 	switch {
 	case m.promoter == nil:
@@ -1035,7 +1103,7 @@ func (m Model) promoteRequest() (tea.Model, tea.Cmd) {
 		m.setStatus("every stage has taken this change", true)
 	case rs.stage != ro.Next:
 		m.setStatus(fmt.Sprintf("not the next stage: %s is (→/← to select it)", ro.NextName()), true)
-	case !rollout.Open(ro.Gates):
+	case !changeorder.Open(ro.Gates):
 		m.setStatus("promote refused: "+ro.Blocker, true)
 	case rs.previewPending[rs.stage]:
 		m.setStatus("the dry run is still running; try again in a moment", true)
@@ -1060,30 +1128,33 @@ func (m Model) promoteRequest() (tea.Model, tea.Cmd) {
 				lines = append(lines, dimStyle.Render(fmt.Sprintf("  %-40s skipped: %s", spv.Space.Slug, spv.Skipped)))
 				continue
 			}
-			n, kept := 0, 0
+			n, kept, added := 0, 0, 0
 			for _, u := range spv.Units {
 				if !u.NoChange && u.Err == "" {
 					n++
 				}
+				if u.New {
+					added++
+				}
 				kept += len(u.Kept)
 			}
 			line := fmt.Sprintf("  %-40s %d unit(s) change, %d covered", spv.Space.Slug, n, len(spv.Units))
+			if added > 0 {
+				line += fmt.Sprintf(", %d added from upstream", added)
+			}
 			if kept > 0 {
 				line += warnStyle.Render(fmt.Sprintf("  · %d field(s) NOT changed (kept)", kept))
 			}
 			lines = append(lines, line)
 		}
-		lines = append(lines, "", fmt.Sprintf("%d unit(s), %d field(s) change across the stage. Promotion moves configuration only; it publishes no release.", units, fields), "", "Runs, per space:")
-		for _, spv := range p.Spaces {
-			if spv.Skipped == "" {
-				lines = append(lines, "  PATCH /api/unit?"+promoteQueryString(ro, spv.Space.ID))
-			}
-		}
-		lines = append(lines, "", "Equivalent:", "  "+strings.Join(rollout.PromoteCommands(ro, rs.stage), "\n  "), "",
+		lines = append(lines, "", fmt.Sprintf("%d unit(s), %d field(s) change across the stage. Promotion moves configuration only; it publishes no release.", units, fields), "",
+			"Runs, as one request the server applies space by space in upstream order, refusing if the plan has changed since this dry run:",
+			"  POST /api/promote  "+changeorder.PromoteRequest(ro, rs.stage, p.Plan))
+		lines = append(lines, "", "Equivalent:", "  "+strings.Join(changeorder.PromoteCommands(ro, rs.stage, p.Plan), "\n  "), "",
 			focusStyle.Render("y")+" promote   "+dimStyle.Render("any other key cancels"))
-		promoter, stage := m.promoter, rs.stage
+		promoter, stage, plan := m.promoter, rs.stage, p.Plan
 		rs.confirm = &confirmState{title: "Promote " + st.Name, lines: lines, stage: rs.stage, run: func(ctx context.Context) (string, error) {
-			out, err := promoter(ctx, ro, stage)
+			out, err := promoter(ctx, ro, stage, plan)
 			return promoteReport(ro, stage, out, err), err
 		}}
 	}
@@ -1092,7 +1163,7 @@ func (m Model) promoteRequest() (tea.Model, tea.Cmd) {
 
 // releasable says whether L has anything to do on the selected stage, or why not.
 func (m Model) releasable() (ok bool, reason string) {
-	rs := m.roll
+	rs := m.order
 	ro := rs.ro
 	switch {
 	case m.releaser == nil:
@@ -1130,7 +1201,7 @@ func (m Model) releasable() (ok bool, reason string) {
 // releaseRequest is L: publish the selected stage's releases, pinned to the
 // change order's end tag, behind the confirm overlay.
 func (m Model) releaseRequest() (tea.Model, tea.Cmd) {
-	rs := m.roll
+	rs := m.order
 	ro := rs.ro
 	if ok, reason := m.releasable(); !ok {
 		m.setStatus(reason, true)
@@ -1150,13 +1221,13 @@ func (m Model) releaseRequest() (tea.Model, tea.Cmd) {
 			lines = append(lines, fmt.Sprintf("  %-40s publish, pinned to the change order's end tag", sp.Slug))
 		}
 	}
-	lines = append(lines, "", "Each publish waits for the awaiting/triggers gate the promotion left on the units to clear (up to "+rollout.TriggerWait.String()+"), then runs:")
+	lines = append(lines, "", "Each publish waits for the awaiting/triggers gate the promotion left on the units to clear (up to "+changeorder.TriggerWait.String()+"), then runs, pinned to the end tag and recorded on the change order:")
 	for _, sp := range st.Spaces {
 		if sp.ID != ro.Order.SpaceID && sp.Releasable && sp.Taken && !sp.Released {
-			lines = append(lines, fmt.Sprintf("  POST /api/space/%s/release  {\"TagID\": \"%s\"}", sp.ID, ro.Order.EndTagID))
+			lines = append(lines, fmt.Sprintf("  POST /api/space/%s/release  %s", sp.ID, changeorder.ReleaseRequest(ro)))
 		}
 	}
-	lines = append(lines, "", "Equivalent:", "  "+strings.Join(rollout.ReleaseCommands(ro, rs.stage), "\n  "), "",
+	lines = append(lines, "", "Equivalent:", "  "+strings.Join(changeorder.ReleaseCommands(ro, rs.stage), "\n  "), "",
 		focusStyle.Render("y")+" release   "+dimStyle.Render("any other key cancels"))
 	releaser, stage := m.releaser, rs.stage
 	rs.confirm = &confirmState{title: "Release " + st.Name, lines: lines, stage: rs.stage, run: func(ctx context.Context) (string, error) {
@@ -1168,7 +1239,7 @@ func (m Model) releaseRequest() (tea.Model, tea.Cmd) {
 
 // bothRequest is B: promote the stage, then release it, one confirm.
 func (m Model) bothRequest() (tea.Model, tea.Cmd) {
-	rs := m.roll
+	rs := m.order
 	ro := rs.ro
 	if m.releaser == nil {
 		m.setStatus("release is not wired in this build", true)
@@ -1188,10 +1259,10 @@ func (m Model) bothRequest() (tea.Model, tea.Cmd) {
 	}
 	model, cmd := m.promoteRequest()
 	mm := model.(Model)
-	if mm.roll.confirm == nil {
+	if mm.order.confirm == nil {
 		return mm, cmd
 	}
-	c := mm.roll.confirm
+	c := mm.order.confirm
 	st := ro.Stages[c.stage]
 	c.title = "Promote and release " + st.Name
 	// swap the trailing prompt and add the release half
@@ -1203,9 +1274,9 @@ func (m Model) bothRequest() (tea.Model, tea.Cmd) {
 		}
 	}
 	c.lines = append(c.lines, "", focusStyle.Render("y")+" promote and release   "+dimStyle.Render("any other key cancels"))
-	promoter, releaser, stage := mm.promoter, mm.releaser, c.stage
+	promoter, releaser, stage, plan := mm.promoter, mm.releaser, c.stage, mm.order.previews[c.stage].Plan
 	c.run = func(ctx context.Context) (string, error) {
-		out, err := promoter(ctx, ro, stage)
+		out, err := promoter(ctx, ro, stage, plan)
 		report := promoteReport(ro, stage, out, err)
 		if err != nil {
 			return report, err
@@ -1216,13 +1287,9 @@ func (m Model) bothRequest() (tea.Model, tea.Cmd) {
 	return mm, cmd
 }
 
-func promoteQueryString(ro *rollout.Rollout, spaceID string) string {
-	return fmt.Sprintf("where=SpaceID = '%s' AND UpstreamUnitID IS NOT NULL&upgrade=true&change_order=%s", spaceID, ro.Order.ID)
-}
-
 // confirmKey owns the keys while the overlay is up.
 func (m Model) confirmKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	rs := m.roll
+	rs := m.order
 	c := rs.confirm
 	rs.confirm = nil
 	if k.String() != "y" {
@@ -1238,9 +1305,9 @@ func (m Model) confirmKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // actionDone records the report and refreshes the reading; the report opens
-// once the refreshed rollout has landed (rolloutLoaded).
+// once the refreshed change order has landed (changeOrderLoaded).
 func (m Model) actionDone(msg actionMsg) (tea.Model, tea.Cmd) {
-	rs := m.roll
+	rs := m.order
 	if rs == nil || rs.ro.Order.ID != msg.orderID {
 		return m, nil
 	}
@@ -1252,7 +1319,7 @@ func (m Model) actionDone(msg actionMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func promoteReport(ro *rollout.Rollout, stage int, outcomes []rollout.Outcome, err error) string {
+func promoteReport(ro *changeorder.ChangeOrder, stage int, outcomes []changeorder.Outcome, err error) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Promoted %s into stage %s\n\n", ro.Order.Slug, ro.Stages[stage].Name)
 	if err != nil {
@@ -1265,14 +1332,23 @@ func promoteReport(ro *rollout.Rollout, stage int, outcomes []rollout.Outcome, e
 			fmt.Fprintf(&b, "  %-40s skipped: %s\n", o.Space.Slug, o.Skipped)
 		case o.Err != "":
 			failed++
-			fmt.Fprintf(&b, "  %-40s %s\n", o.Space.Slug, errStyle.Render("failed: "+o.Err))
+			fmt.Fprintf(&b, "  %-40s %s\n", o.Space.Slug, errStyle.Render(strings.ToLower(o.Action)+": "+o.Err))
+		case o.Action == "Unchanged":
+			fmt.Fprintf(&b, "  %-40s unchanged: already had the change\n", o.Space.Slug)
 		default:
 			if len(o.Errors) > 0 {
 				failed++
 			} else {
 				landed++
 			}
-			fmt.Fprintf(&b, "  %-40s %d unit(s) processed, %d failed (HTTP %d)\n", o.Space.Slug, o.Changed, len(o.Errors), o.Status)
+			line := fmt.Sprintf("  %-40s %d unit(s) written, %d marked", o.Space.Slug, o.Changed, o.Marked)
+			if len(o.Added) > 0 {
+				line += ", added " + strings.Join(o.Added, ", ")
+			}
+			if len(o.Errors) > 0 {
+				line += fmt.Sprintf(", %d failed", len(o.Errors))
+			}
+			fmt.Fprintln(&b, line)
 			for _, e := range o.Errors {
 				fmt.Fprintf(&b, "      %s\n", errStyle.Render(e))
 			}
@@ -1282,7 +1358,7 @@ func promoteReport(ro *rollout.Rollout, stage int, outcomes []rollout.Outcome, e
 	return b.String()
 }
 
-func releaseReport(ro *rollout.Rollout, stage int, outcomes []rollout.ReleaseOutcome, err error) string {
+func releaseReport(ro *changeorder.ChangeOrder, stage int, outcomes []changeorder.ReleaseOutcome, err error) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Released %s from stage %s\n\n", ro.Order.Slug, ro.Stages[stage].Name)
 	if err != nil {
@@ -1311,7 +1387,7 @@ func releaseReport(ro *rollout.Rollout, stage int, outcomes []rollout.ReleaseOut
 
 // confirmView draws the overlay in place of the panes.
 func (m Model) confirmView(w, h int) string {
-	c := m.roll.confirm
+	c := m.order.confirm
 	body := titleStyle.Render(" "+c.title) + "\n\n " + strings.Join(c.lines, "\n ")
 	return lipgloss.NewStyle().Width(w).Height(h).MaxWidth(w).MaxHeight(h).Render(body)
 }

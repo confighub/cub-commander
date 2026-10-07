@@ -33,9 +33,9 @@ func NewLive() *Live {
 	return &Live{labelKeys: map[string]map[string]int{}, labelVals: map[string]map[string]map[string]int{}, valueKeys: map[string]int{}, totals: map[string]int{}}
 }
 
-// Sample fetches labels for Unit, Space and Target org-wide.
+// Sample fetches labels for Unit, Space, Target and Component org-wide.
 func (l *Live) Sample(ctx context.Context, c *cubclient.Client) error {
-	for _, ent := range []string{"Space", "Unit", "Target"} {
+	for _, ent := range []string{"Space", "Unit", "Target", "Component"} {
 		e, _ := Lookup(ent)
 		sel := "Slug,Labels"
 		if ent == "Unit" {

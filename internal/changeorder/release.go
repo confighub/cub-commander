@@ -1,27 +1,21 @@
-package rollout
+package changeorder
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/confighub/cub-commander/internal/cubclient"
 )
-
-// Publisher is the client surface a release needs on top of Writer.
-type Publisher interface {
-	Writer
-	PostRow(ctx context.Context, path string, body string) (cubclient.Row, error)
-}
 
 // ReleaseOutcome is what publishing one space did.
 type ReleaseOutcome struct {
 	Space      Space
 	ReleaseID  string
 	ReleaseNum string
+	Message    string // the server's note when no new release was needed
 	Err        string
 	Skipped    string
 	WaitedFor  time.Duration // how long the awaiting/triggers gate held the publish
@@ -39,12 +33,15 @@ var (
 const awaitingTriggers = "awaiting/triggers"
 
 // ReleaseStage publishes a release of every space of a stage that has taken
-// the change and has a release target, pinned to the change order's end tag:
-// `cub release publish --revision ChangeOrder:<slug> <space>` per space. A
-// class base has no target and is skipped; a space that has released already
-// is skipped too. Each publish first waits for the awaiting/triggers gate to
-// clear on the space's units, as the CLI's --wait does after a promote.
-func ReleaseStage(ctx context.Context, c Publisher, r *Rollout, stage int) ([]ReleaseOutcome, error) {
+// the change and has a release target, pinned to the change order's end tag
+// and published for the change order, so the server records the release on
+// it and advances its Stage: `cub release publish --revision
+// ChangeOrder:<slug> <space>` per space. A class base has no target and is
+// skipped; a space that has released already is skipped too. Each publish
+// first waits for the awaiting/triggers gate to clear on the space's units,
+// as the CLI's --wait does after a promote. A stage's ReleasePrerequisites
+// are the server's to enforce; its refusal is reported per space.
+func ReleaseStage(ctx context.Context, c Client, r *ChangeOrder, stage int) ([]ReleaseOutcome, error) {
 	if stage <= 0 || stage >= len(r.Stages) {
 		return nil, fmt.Errorf("no such stage")
 	}
@@ -82,19 +79,29 @@ func ReleaseStage(ctx context.Context, c Publisher, r *Rollout, stage int) ([]Re
 			out = append(out, o)
 			continue
 		}
-		body, _ := json.Marshal(map[string]string{"TagID": r.Order.EndTagID})
-		row, err := c.PostRow(ctx, "/space/"+sp.ID+"/release", string(body))
+		body := ReleaseRequest(r)
+		_, res, err := c.Send(ctx, http.MethodPost, "/space/"+sp.ID+"/release", nil, "application/json", body)
 		if err != nil {
 			o.Err = err.Error()
 			out = append(out, o)
 			continue
 		}
-		rel := own(row, "Release")
+		var resp map[string]any
+		_ = json.Unmarshal(res, &resp)
+		rel := own(resp, "Release")
 		o.ReleaseID = str(rel["ReleaseID"])
 		o.ReleaseNum = str(rel["ReleaseNum"])
+		o.Message = str(resp["Message"])
 		out = append(out, o)
 	}
 	return out, nil
+}
+
+// ReleaseRequest is the body each publish sends: the end tag to pin to and
+// the change order the release is published for.
+func ReleaseRequest(r *ChangeOrder) string {
+	b, _ := json.Marshal(map[string]string{"TagID": r.Order.EndTagID, "ChangeOrderID": r.Order.ID})
+	return string(b)
 }
 
 // waitForTriggers polls the space's units until none carries the
@@ -132,7 +139,7 @@ func waitForTriggers(ctx context.Context, c Client, spaceID string) ([]string, e
 
 // ReleaseCommands are the CLI lines a release of this stage stands for, one
 // per space that would be published.
-func ReleaseCommands(r *Rollout, stage int) []string {
+func ReleaseCommands(r *ChangeOrder, stage int) []string {
 	if stage <= 0 || stage >= len(r.Stages) {
 		return nil
 	}
@@ -150,13 +157,13 @@ func ReleaseCommands(r *Rollout, stage int) []string {
 // marked as taken, so a release that follows the promote in one action does
 // not skip them: the server's ResolvedSpaceIDs would say the same once
 // re-read, and B has not re-read yet.
-func AfterPromote(r *Rollout, promoted []Outcome) *Rollout {
+func AfterPromote(r *ChangeOrder, promoted []Outcome) *ChangeOrder {
 	if len(promoted) == 0 {
 		return r
 	}
 	landed := map[string]bool{}
 	for _, o := range promoted {
-		if o.Skipped == "" && o.Err == "" && len(o.Errors) == 0 {
+		if o.Action == "Promote" && o.Err == "" && len(o.Errors) == 0 {
 			landed[o.Space.ID] = true
 		}
 	}

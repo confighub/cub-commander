@@ -47,11 +47,12 @@ ResourceType}`. The where grammar (`confighub/internal/views/filter_parser.go`) 
 - Terms on the entity's own columns become SQL; terms on joined or computed attributes are
   evaluated **in memory on the server** after expansion. `Data.` terms are split out into the
   separate `where_data` parameter.
-- Joinable prefixes per entity come from `EntityExpanders`. Unit: Organization, Space, Target,
-  ChangeSet, UpstreamUnit, UpstreamSpace, ApprovedBy*, FromLink*, BridgeWorker, HeadRevision,
-  LastReleasedRevision, HeadMutation, UnitEvent. Space: Triggers*, Attributes*, ReleaseTarget.
-  Revision: Unit, User, ChangeSet, Tags*, ChangeOrders*, Releases*. Link: FromUnit, ToUnit,
-  ToSpace. (`*` = list-valued.)
+- Joinable prefixes per entity come from the `Extended<Entity>` schemas (SDK core v0.8.7).
+  Unit: Organization, Space, Target, ChangeSet, UpstreamUnit, UpstreamSpace, FromLink*,
+  HeadRevision, LastReleasedRevision, HeadMutation, UnitEvent. Space: Component,
+  UpstreamSpace, Triggers*, Attributes*, ReleaseTarget. Revision: Unit, User, ChangeSet,
+  Tags*, ChangeOrders*, Releases*, Attestations*. ChangeOrder: StartTag, EndTag, RestoreTag,
+  Invocation, SpaceFilter, UnitFilter. Link: FromUnit, ToUnit, ToSpace. (`*` = list-valued.)
 
 **Projection = View.** A View is `{Of | FilterID, Columns[], GroupBy, OrderBy, OrderByDirection}`
 where a column is `MetadataAttribute` (`Space.Slug`, `Unit.Labels.Environment`),

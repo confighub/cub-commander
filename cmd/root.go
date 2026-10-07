@@ -11,12 +11,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/confighub/cub-commander/internal/catalog"
+	"github.com/confighub/cub-commander/internal/changeorder"
 	"github.com/confighub/cub-commander/internal/cubclient"
 	"github.com/confighub/cub-commander/internal/exec"
 	"github.com/confighub/cub-commander/internal/format"
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
-	"github.com/confighub/cub-commander/internal/rollout"
 	"github.com/confighub/cub-commander/internal/scout"
 	"github.com/confighub/cub-commander/internal/tui"
 )
@@ -146,19 +146,19 @@ func runStatements(ctx context.Context, src string) error {
 			if err != nil {
 				return err
 			}
-			if p.Rollout != nil {
+			if p.ChangeOrder != nil {
 				if len(rows) != 1 {
-					return fmt.Errorf("rollout opens one change order; the where steps matched %d", len(rows))
+					return fmt.Errorf("the changeorder step opens one change order; the where steps matched %d", len(rows))
 				}
-				ro, err := rollout.Load(ctx, c, rollout.NewCache(), rows[0])
+				ro, err := changeorder.Load(ctx, c, changeorder.NewCache(), rows[0])
 				if err != nil {
 					return err
 				}
 				fmt.Print(ro.Text())
 				continue
 			}
-			if p.RolloutCols {
-				if _, err := tui.RolloutRunner(ctx, c, x, p, rows); err != nil {
+			if p.ChangeOrderCols {
+				if _, err := tui.ChangeOrderRunner(ctx, c, x, p, rows); err != nil {
 					return err
 				}
 			}

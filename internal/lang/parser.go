@@ -257,15 +257,15 @@ func (p *parser) pipelineStmt() (Stmt, error) {
 				}
 			}
 			st.Diff = d
-		case t.Is("rollout"):
+		case t.Is("changeorder"):
 			p.next()
-			st.Rollout = &RolloutStep{}
+			st.ChangeOrder = &ChangeOrderStep{}
 			if p.accept("stage") {
 				name, err := p.ident()
 				if err != nil {
 					return nil, err
 				}
-				st.Rollout.Stage = name
+				st.ChangeOrder.Stage = name
 			}
 		case t.Is("group"), t.Is("order"), t.Is("limit"):
 			if err := p.tail(st); err != nil {

@@ -1,6 +1,10 @@
 // Package catalog knows what the server exposes: entity types, their REST
 // paths, the key they use in an extended row, and their joins. In M1 this is a
 // static table; live sampling (labels, values, slugs) arrives in M4.
+//
+// Joins follow the Extended<Entity> schemas of the SDK's OpenAPI (core
+// v0.8.7): a join prefix is a key the server puts beside the entity in a
+// list row, and IncludeIDs are the include= fields that make it do so.
 package catalog
 
 import "strings"
@@ -19,21 +23,26 @@ type Entity struct {
 
 var entities = []Entity{
 	{Name: "Unit", CLI: "unit", OrgPath: "/unit", SpaceScoped: true, SpacePath: "unit",
-		Joins:       []string{"Organization", "Space", "Target", "ChangeSet", "UpstreamUnit", "UpstreamSpace", "ApprovedBy*", "FromLink*", "BridgeWorker", "HeadRevision", "LastReleasedRevision", "HeadMutation", "UnitEvent"},
-		IncludeIDs:  []string{"UnitEventID", "TargetID", "UpstreamUnitID", "SpaceID", "FromLinkID", "BridgeWorkerID", "ChangeSetID"},
+		Joins:       []string{"Organization", "Space", "Target", "ChangeSet", "UpstreamUnit", "UpstreamSpace", "FromLink*", "HeadRevision", "LastReleasedRevision", "HeadMutation", "UnitEvent"},
+		IncludeIDs:  []string{"UnitEventID", "TargetID", "UpstreamUnitID", "SpaceID", "FromLinkID", "ChangeSetID"},
 		DefaultCols: []string{"Slug", "Space.Slug", "Space.Labels.*", "Labels.*", "Target.Slug", "HeadRevisionNum", "LastReleasedRevisionNum"},
 		IDField:     "UnitID"},
 	{Name: "Space", CLI: "space", OrgPath: "/space",
-		Joins:       []string{"Organization", "TriggerFilter", "Triggers*", "AttributeFilter", "Attributes*", "ReleaseTarget"},
-		DefaultCols: []string{"Slug", "Labels.*", "ReleaseTarget.Slug"},
+		Joins:       []string{"Organization", "Component", "UpstreamSpace", "TriggerFilter", "Triggers*", "AttributeFilter", "Attributes*", "ReleaseTarget"},
+		IncludeIDs:  []string{"ComponentID"},
+		DefaultCols: []string{"Slug", "Component.Slug", "Labels.*", "ReleaseTarget.Slug"},
 		IDField:     "SpaceID"},
+	{Name: "Component", CLI: "component", OrgPath: "/component",
+		Joins:       []string{"Organization"},
+		DefaultCols: []string{"Slug", "DisplayName", "Labels.*", "ChangeWorkflowRequired"},
+		IDField:     "ComponentID"},
 	{Name: "Target", CLI: "target", OrgPath: "/target", SpaceScoped: true, SpacePath: "target",
-		Joins:       []string{"Organization", "Space", "BridgeWorker", "TriggerFilter", "Triggers*"},
-		IncludeIDs:  []string{"SpaceID", "BridgeWorkerID"},
-		DefaultCols: []string{"Slug", "Space.Slug", "Labels.*", "BridgeWorker.Slug", "ProviderType"},
+		Joins:       []string{"Organization", "Space", "TriggerFilter", "Triggers*"},
+		IncludeIDs:  []string{"SpaceID"},
+		DefaultCols: []string{"Slug", "Space.Slug", "Labels.*"},
 		IDField:     "TargetID"},
 	{Name: "Revision", CLI: "revision", OrgPath: "/revision",
-		Joins:       []string{"Organization", "Space", "Unit", "User", "ChangeSet", "Tags*", "ChangeOrders*", "Releases*"},
+		Joins:       []string{"Organization", "Space", "Unit", "User", "ChangeSet", "Tags*", "ChangeOrders*", "Releases*", "Attestations*"},
 		IncludeIDs:  []string{"SpaceID", "UnitID", "UserID", "ChangeSetID"},
 		DefaultCols: []string{"RevisionNum", "Unit.Slug", "Space.Slug", "CreatedAt", "User.Username", "Source", "Description"},
 		IDField:     "RevisionID"},
@@ -73,10 +82,20 @@ var entities = []Entity{
 		DefaultCols: []string{"Slug", "Space.Slug", "State", "StartTag.Slug", "EndTag.Slug"},
 		IDField:     "ChangeSetID"},
 	{Name: "ChangeOrder", CLI: "changeorder", OrgPath: "/change_order", SpaceScoped: true, SpacePath: "change_order",
-		Joins:       []string{"Organization", "Space", "StartTag", "EndTag", "RestoreTag"},
+		Joins:       []string{"Organization", "Space", "StartTag", "EndTag", "RestoreTag", "Invocation", "SpaceFilter", "UnitFilter"},
 		IncludeIDs:  []string{"SpaceID"},
-		DefaultCols: []string{"Slug", "Space.Slug", "State"},
+		DefaultCols: []string{"Slug", "Space.Slug", "State", "Stage", "UpdateType"},
 		IDField:     "ChangeOrderID"},
+	{Name: "ChangeWorkflow", CLI: "changeworkflow", OrgPath: "/change_workflow", SpaceScoped: true, SpacePath: "change_workflow",
+		Joins:       []string{"Organization", "Space"},
+		IncludeIDs:  []string{"SpaceID"},
+		DefaultCols: []string{"Slug", "Space.Slug", "DisplayName"},
+		IDField:     "ChangeWorkflowID"},
+	{Name: "Attestation", CLI: "attestation", OrgPath: "/attestation", SpaceScoped: true, SpacePath: "attestation",
+		Joins:       []string{"Organization", "Space"},
+		IncludeIDs:  []string{"SpaceID"},
+		DefaultCols: []string{"Type", "Result", "Space.Slug", "Note", "CreatedAt"},
+		IDField:     "AttestationID"},
 	{Name: "Release", CLI: "release", OrgPath: "/release", SpaceScoped: true, SpacePath: "release",
 		Joins:       []string{"Organization", "Space", "Tag"},
 		IncludeIDs:  []string{"SpaceID", "TagID"},
@@ -102,10 +121,18 @@ var entities = []Entity{
 		IncludeIDs:  []string{"SpaceID", "UnitID"},
 		DefaultCols: []string{"UnitActionNum", "Unit.Slug", "Space.Slug", "Action", "Status", "CreatedAt"},
 		IDField:     "UnitActionID"},
+	{Name: "ReviewComment", CLI: "review-comment", OrgPath: "/review_comment",
+		Joins:       []string{"Organization", "Space", "Unit", "Revision"},
+		IncludeIDs:  []string{"SpaceID", "UnitID", "RevisionID"},
+		DefaultCols: []string{"Unit.Slug", "Space.Slug", "RevisionNum", "Path", "Text", "CreatedAt"},
+		IDField:     "ReviewCommentID"},
 	{Name: "User", CLI: "user", OrgPath: "/user",
 		Joins:       []string{"Organization"},
 		DefaultCols: []string{"Username", "DisplayName", "Email"},
 		IDField:     "UserID"},
+	{Name: "Group", CLI: "group", OrgPath: "/group",
+		DefaultCols: []string{"Slug", "DisplayName", "ExternalID"},
+		IDField:     "GroupID"},
 	{Name: "Organization", CLI: "organization", OrgPath: "/organization",
 		DefaultCols: []string{"Slug", "DisplayName", "EmailDomain"},
 		IDField:     "OrganizationID"},
@@ -116,7 +143,13 @@ var entities = []Entity{
 		IDField:     "ResourceID"},
 }
 
-var aliases = map[string]string{"worker": "BridgeWorker", "workers": "BridgeWorker", "units": "Unit", "spaces": "Space", "targets": "Target", "revisions": "Revision", "links": "Link", "filters": "Filter", "views": "View", "tags": "Tag", "triggers": "Trigger", "changesets": "ChangeSet", "releases": "Release", "users": "User"}
+var aliases = map[string]string{
+	"worker": "BridgeWorker", "workers": "BridgeWorker", "units": "Unit", "spaces": "Space", "targets": "Target",
+	"revisions": "Revision", "links": "Link", "filters": "Filter", "views": "View", "tags": "Tag", "triggers": "Trigger",
+	"changesets": "ChangeSet", "changeorders": "ChangeOrder", "releases": "Release", "users": "User",
+	"components": "Component", "workflow": "ChangeWorkflow", "workflows": "ChangeWorkflow", "changeworkflows": "ChangeWorkflow",
+	"attestations": "Attestation", "groups": "Group", "comment": "ReviewComment", "comments": "ReviewComment", "reviewcomments": "ReviewComment",
+}
 
 // Lookup finds an entity by name, case-insensitively, accepting a few plurals and aliases.
 func Lookup(name string) (Entity, bool) {
@@ -156,6 +189,6 @@ func (e Entity) IsJoin(first string) bool {
 }
 
 // mapFields are map-valued attributes; a path under them is a key, not a subfield.
-var mapFields = map[string]bool{"Labels": true, "Annotations": true, "Values": true, "ApplyGates": true, "DeleteGates": true, "DestroyGates": true, "Tags": true, "Releases": true, "Facts": true, "Permissions": true, "Data": true}
+var mapFields = map[string]bool{"Labels": true, "Annotations": true, "Values": true, "ApplyGates": true, "DeleteGates": true, "DestroyGates": true, "Tags": true, "Releases": true, "Facts": true, "Permissions": true, "Data": true, "Claims": true, "Parameters": true, "ValidationResults": true, "SkippedUnits": true}
 
 func IsMapField(f string) bool { return mapFields[f] }

@@ -699,6 +699,11 @@ func (m *Model) presets() []chooserItem {
 	add("Unit", "Target", []string{"Target.Slug"})
 	add("Resource", "Component → Variant → Resources", path("Resource", "Component", "Variant"))
 	add("Resource", "Component → Environment → Region → Cluster → Resources", path("Resource", "Component", "Environment", "Region", "Cluster"))
+	// The Component entity: a space names its component with ComponentID, so
+	// the variants of a component group under the join rather than a label.
+	if sampled && m.live.Total("Component") > 0 {
+		items = append(items, chooserItem{label: "Space    by Component → Variant (Component entity)", stmt: "Space | in * | where ComponentID IS NOT NULL | browse by Component.Slug, " + firstNonEmpty(axis("Space", "Variant"), "Slug")})
+	}
 	add("Space", "Component → Variant", path("Space", "Component", "Variant"))
 	add("Space", "Layer → Component → Variant", path("Space", "Layer", "Component", "Variant"))
 	add("Space", "Environment → Region → Cluster", path("Space", "Environment", "Region", "Cluster"))
@@ -714,7 +719,7 @@ func (m *Model) presets() []chooserItem {
 		})
 	}
 	items = append(items, chooserItem{label: "Target   by Target → Units", stmt: "Unit | in * | where TargetID IS NOT NULL | browse by Target.Slug"})
-	items = append(items, chooserItem{label: "Rollouts in flight (change orders still moving; ⏎ on one opens it)", stmt: RolloutsPreset})
+	items = append(items, chooserItem{label: "Change orders in flight (change orders still moving; ⏎ on one opens it)", stmt: ChangeOrdersPreset})
 	items = append(items,
 		chooserItem{label: "Unit     raw list (default columns)", stmt: "Unit | in * | limit 500"},
 		chooserItem{label: "Space    raw list", stmt: "Space"},

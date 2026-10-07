@@ -148,10 +148,22 @@ func JoinEntity(prefix string) string {
 		return "Tag"
 	case "Invocation", "TransformInvocation":
 		return "Invocation"
-	case "ApprovedBy", "User":
+	case "User":
 		return "User"
 	case "FromLink":
 		return "Link"
+	case "Component":
+		return "Component"
+	case "ChangeWorkflow":
+		return "ChangeWorkflow"
+	case "Attestations":
+		return "Attestation"
+	case "SpaceFilter":
+		return "Filter"
+	case "UpstreamTarget":
+		return "Target"
+	case "UnitEvent", "LatestUnitEvent":
+		return "UnitEvent"
 	case "Triggers":
 		return "Trigger"
 	case "Attributes":

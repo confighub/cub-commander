@@ -1,4 +1,4 @@
-package rollout
+package changeorder
 
 import (
 	"context"
@@ -22,11 +22,17 @@ func TestReleaseStage(t *testing.T) {
 	if err != nil || len(out) != 2 {
 		t.Fatalf("%v %+v", err, out)
 	}
-	if out[0].Skipped != "already released this change" || out[1].ReleaseID != "rel-1" || out[1].Err != "" {
+	if out[0].Skipped != "already released this change" || out[1].ReleaseID == "" || out[1].Err != "" {
 		t.Errorf("%+v", out)
 	}
-	if len(c.Posts) != 1 || c.Posts[0] != `/space/cm-test2/release {"TagID":"tag-cm-end"}` {
-		t.Errorf("posts: %v", c.Posts)
+	var posts []string
+	for _, p := range c.Posts {
+		if strings.Contains(p, "/release ") {
+			posts = append(posts, p)
+		}
+	}
+	if len(posts) != 1 || posts[0] != `/space/cm-test2/release {"ChangeOrderID":"co-cm","TagID":"tag-cm-end"}` {
+		t.Errorf("posts: %v", posts)
 	}
 	if got := ReleaseCommands(r, 3); len(got) != 1 || got[0] != "cub release publish --revision ChangeOrder:cert-manager-base/cert-manager-1-17-0 cert-manager-us-east-test2" {
 		t.Errorf("%v", got)
@@ -58,7 +64,12 @@ func TestReleaseWaitsForTriggers(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := out[1]
-	if len(o.StillGated) != 1 || o.StillGated[0] != "controller" || !strings.Contains(o.Err, "awaiting/triggers") || len(c.Posts) != 0 {
-		t.Errorf("%+v posts %v", o, c.Posts)
+	if len(o.StillGated) != 1 || o.StillGated[0] != "controller" || !strings.Contains(o.Err, "awaiting/triggers") {
+		t.Errorf("%+v", o)
+	}
+	for _, p := range c.Posts {
+		if strings.Contains(p, "/release ") {
+			t.Errorf("published past the gate: %s", p)
+		}
 	}
 }

@@ -15,7 +15,7 @@ not written anywhere else. Read this before adding a mode.*
 | `internal/cubclient` | Thin HTTP client: `List`, `GetRaw`, `GetRawETag`, `PutRaw` (If-Match, 409 → `ConflictError`), `SpaceID` cache, retrying transport. |
 | `internal/history` | jsonl statement history under `~/.confighub/commander/`. |
 | `internal/scout` | Exact Resource identity and explicit Target-ID/context binding, bounded JSON subprocess adapter, response validation, output/time limits and supervised process cancellation. No Kubernetes client, joined-row fallback, or persistent cache. |
-| `internal/rollout` | A ChangeOrder read as a rollout: the pinned ChangeWorkflow revision, each stage's spaces (selector + component, filtered to `InScopeSpaceIDs`), taken/released from the server's per-space sets, healthy from the live-status annotation, the next stage and its gates in the CLI's words (`derive`), and the change per space from the order's start/end tags (`Change`). `MemClient` + `ChapterOne()` are the offline fixture other packages' tests use. See `rollouts.md`. |
+| `internal/rollout` | A ChangeOrder read as a rollout, from what the server says: the ChangeWorkflow copy, Stage, Promotions and Releases on the order; each stage's spaces (`WhereSpace ∩ InScopeSpaceIDs`); taken/released from the per-space sets; healthy from the latest published Release's `LiveStatus`; the next stage and its gates from a `POST /promote` dry run (`derive` only picks the console state); the change per space from `unit_diff` (`ChangeIn`); the preview from the dry run with diffs; promote with `ExpectedPlan`; release for the order. `MemClient` (with a stand-in `/promote`) + `ChapterOne()` are the offline fixture other packages' tests use; `live_test.go` is the opt-in read-only live check. See `rollouts.md`. |
 | `internal/tui` | The Bubble Tea v2 app. See below. |
 | `cmd` | cobra root: `commander` opens the TUI; hidden `-e` runs statements for scripts and tests. |
 
@@ -56,9 +56,9 @@ One `Model` (`app.go`) with:
   picker). `d` runs the diff. Keep `m`/`d` meaning that everywhere.
 - **Writes**: `SaveUnitData`, always with `If-Match`; a resource edit is the unit rewritten
   with one document replaced (`exec.Stream.Replace`). An empty hash refuses to write. And the
-  rollout promote (`rollout.PromoteStage`): a bulk `PATCH /unit … upgrade=true&change_order=…`
-  per space, offered only after a fresh reading says the gates are open and a dry run of the
-  same request (`PreviewStage`) has no blockers, behind a `y` confirm overlay
+  rollout promote (`rollout.PromoteStage`): one `POST /promote` for the stage carrying the
+  dry run's `Plan` as `ExpectedPlan`, offered only after a fresh reading says the server's
+  gates hold and the dry run (`PreviewStage`) has no blockers, behind a `y` confirm overlay
   (`rolloutState.confirm`, routed before the global chords like the popup and picker); the
   server is idempotent per unit, so re-running is safe. The reading is re-executed afterwards
   and the report shown once it lands. Anything new that writes follows one of these two shapes.
@@ -98,9 +98,12 @@ are in [resource-evidence.md](resource-evidence.md).
   environment, so it can be pointed at another context without switching `cub context`.
 - Never write to the production org for a test; the demo context is for that.
 - The org-wide `/revision` and `/revision_data` endpoints return **one row per unit** unless
-  `distinct_on=Off` is passed, and Off demands an explicit `limit`. A before/after pair of
-  one unit is two rows of one unit; `rollout.RevisionData` passes Off. The space-scoped
-  `/space/{s}/unit/{u}/revision` list is not affected.
+  `distinct_on=Off` is passed, and Off demands an explicit `limit`. The space-scoped
+  `/space/{s}/unit/{u}/revision` list is not affected. (Rollouts no longer read revision
+  bodies; `unit_diff` does the pairing server-side.)
+- A list statement's `select` trims the row to what the plan names; anything a reading needs
+  beyond the columns (the rollout's `ChangeWorkflow`, `Promotions`, …) must be in
+  `plan.rolloutFields`, or it arrives empty and reads as absent.
 
 ## Loop
 

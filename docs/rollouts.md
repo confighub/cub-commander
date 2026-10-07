@@ -12,32 +12,33 @@ open, this page says so and the roadmap marks it gated.
 
 ## 1. What the platform gives us
 
-**A rollout is a ChangeOrder plus the ChangeWorkflow it was created under.** Nothing stores
-a stage. Everything commander shows is derived on read, exactly as `cub changeorder get`
-and the Web UI derive it:
+*Rewritten 2026-10-06 for API 0.8 (SDK core v0.8.7). The first cut (2026-09-05) derived
+stages and gates on the client, as the spec's Q12 then required; the server owns them now
+(`confighub/docs/design/promote-api.md`), and commander reads what it says.*
+
+**A rollout is a ChangeOrder plus the ChangeWorkflow copy it carries.** The ChangeOrder
+records the stage it has reached and the promotions and releases that got it there; the one
+thing still read on the client is the picture around that: which spaces each stage holds and
+what each has done.
 
 | Fact | Where it comes from |
 |---|---|
 | The rollouts in flight | `GET /change_order` org-wide; `State` in `New, InProgress, Resolved` is moving, `Released` is done by state, `Aborted/Restored/RestoreReleased` are the undo family. |
-| The workflow governing one | annotations `confighub.com/change-workflow-unit-id` and `…-revision-num` on the ChangeOrder; the pinned revision's data (`/space/{s}/unit/{u}/revision/{r}/data`) parses as `changeworkflow.ChangeWorkflow` (SDK `core/changeworkflow`). |
-| A stage's member spaces | `GET /space?where=<stage.whereSpace> AND Labels.Component = '<component>'`, then filtered to the ChangeOrder's `InScopeSpaceIDs`. The component is the base space's `Component` label. |
-| Promoted / released per space | `ResolvedSpaceIDs` / `ReleasedSpaceIDs` on the ChangeOrder (server-derived). |
-| Healthy per space | the space's `confighub.com/live-status` annotation: `syncStatus=Synced`, `operationPhase=Succeeded`, `healthStatus=Healthy`. A space with no `ReleaseTargetID` is never healthy and never released. |
-| The next stage | the first stage whose members are not all in `ResolvedSpaceIDs` (the base's own stage passes trivially, since the base is resolved from birth). |
-| The gates on it | the next stage's `prerequisites`, evaluated over every member of the previous stage: taken (always), `released`, `healthy`. |
-| Completed | the last stage's members satisfy `final.prerequisites`. Different reading from `State`; both are shown. |
-| The change itself | Revisions carrying the ChangeOrder's start and end Tags: `GET /revision?where=SpaceID = '<space>' AND Tags ? '<StartTagID>'` and the same for `EndTagID`; bodies in one call from `GET /revision_data?where=RevisionID IN (…)`. A unit whose start and end land on the same revision is *untouched*. |
-| What a promotion would do | `PATCH /unit?where=SpaceID IN (…) AND UpstreamUnitID IS NOT NULL&upgrade=true&change_order=<id>&dry_run=true&include=ConfigData`, body `null`. Per-unit multi-status; `ConfigData` is the would-be result, diffed locally against the unit's current data. |
-| Promote | the same call without `dry_run`. |
-| Release | `POST /space/{space}/release` with `TagID = EndTagID`, which is `cub release publish --revision ChangeOrder:<slug>`. Blocked while any bundled unit carries an ApplyGate, including the transient `awaiting/triggers` a promotion leaves behind. |
+| The workflow governing one | `ChangeOrder.ChangeWorkflow`, a `ChangeWorkflowSpec` copied onto the order when it was created (stages with `WhereSpace`, `Prerequisites`, `ReleasePrerequisites`; `Final`; custom and attestation prerequisites). `ChangeWorkflowID` names the entity, read once for its slug. |
+| The stage reached | `ChangeOrder.Stage`, set by the server on every promotion and release publish; `Completed` once the last stage satisfies `Final`. |
+| A stage's member spaces | `GET /space?where=<stage.WhereSpace> AND SpaceID IN (<InScopeSpaceIDs>)`: the selector intersected with the order's scope, exactly as the server computes membership. Nothing else is implied, the component included. |
+| Promoted / released per space | `ResolvedSpaceIDs` / `ReleasedSpaceIDs` on the ChangeOrder (server-derived); `Promotions` and `Releases` say who, when and which release. |
+| Healthy per space | the `LiveStatus` of the space's latest published Release (`GET /release?where=Published = true AND SpaceID IN (…)`, highest `ReleaseNum` per space): `Sync=Synced`, `Health=Healthy`, no `Operation` running or failed. A space with no `ReleaseTargetID` is never healthy and never released. |
+| The next stage and its gates | a dry run, `POST /promote {ChangeOrderID, DryRun: true}`: the response names the stage it would enter and every `(prerequisite, space)` pair of that stage's entry gates evaluated over the stage before it, with the CLI's wording when one fails. A refusal is a 409 carrying the same body. `Complete` says every stage already has the change. |
+| Completed | `Stage == Completed` from the server. Between writes the server does not re-evaluate `Final`, so commander also reads `Released`/`Healthy` over the last stage from the bits above and shows the final tally live; a custom or attestation prerequisite is shown as not evaluated here. |
+| The change itself | `GET /unit_diff?where=SpaceID = '<space>'&from=Before:ChangeOrder:<id>&to=ChangeOrder:<id>`: for every unit the order covers there, the revision before it against the one it arrived at, path by path with both values, matched by merge key. A unit with both at the same revision is *untouched*; a unit with no revision on either side is not covered. |
+| What a promotion would do | the same dry run with `include=Diff` and `TargetStage`: per space the action (`Promote`, `Unchanged`, `Skipped`, `Blocked`, `Failed`), per unit the action (`Upgrade`, `Clone`, `Mark`, `Empty`, `Revive`, `Invoke`, `Resolve`, `Unchanged`, `Skip`), its diff, and the paths the merge withholds (`Conflicts`); per link what is copied, adopted, skipped or orphaned; and the `Plan` digest. |
+| Promote | `POST /promote {ChangeOrderID, TargetStage, ExpectedPlan}`: one request the server applies space by space in upstream order, continuing past a failure; 409 if the gates no longer hold, 412 if the plan changed since the dry run. |
+| Release | `POST /space/{space}/release {TagID: EndTagID, ChangeOrderID}`, which is `cub release publish --revision ChangeOrder:<slug>`: pinned to the end tag and recorded on the order, so `Releases` and `Stage` advance in the same transaction. Blocked while any bundled unit carries an ApplyGate, including the transient `awaiting/triggers` a promotion leaves behind, and by the stage's `ReleasePrerequisites`. |
 
-**Gates are checked by the client, not the server** (spec, "The promote operation"; Q12).
-The dry run above does not know about stages; commander has to evaluate prerequisites itself,
-in the CLI's order and wording, before it offers a promote. That is the one piece of logic
-worth getting byte-for-byte right, and it is pinned by tests against the CLI's messages.
-
-Two things the CLI does that the first cut does not: clone units the target lacks (with
-their links) before upgrading, and `--squash`. See §5.
+**Gates are checked by the server, for every client.** Commander never decides whether a
+promote is allowed; it asks, shows the answer per pair, and sends the dry run's `Plan` back so
+that what was shown is what runs.
 
 ## 2. The surface
 
@@ -102,9 +103,10 @@ workflow catalog-api-workflow @rev 3 · component catalog-api · 6 of 7 spaces t
   released/healthy counts as `taken 2/2 · released 2/2 · healthy 0/2`, collapsed to one
   glyph when narrow. The next stage is marked and its gate tally shown in the CLI's words.
 - **Left pane**: the selected stage's spaces with their three bits; the gates on this stage
-  listed with ✓/✗ and the CLI's refusal text on the failing one (`live-status not found for
-  Variant 'us-east-test2'`). On *source* the pane lists the base's units with touched /
-  untouched and the skipped units with reasons.
+  listed as the server evaluated them: one ✓ line per prerequisite naming the spaces it holds
+  for, one ✗ line per failing pair with the server's reason (`Variant 'us-east-test2' is not
+  healthy`). On *source* the pane lists the base's units with touched / untouched and the
+  skipped units with reasons.
 - **Right pane**: the diff for the selection.
   - On *source*: the ordered change, per unit, start-tag revision → end-tag revision.
   - On a stage whose selected space has **not** taken the change: the dry-run preview,
@@ -129,15 +131,15 @@ Three writes, all stage-scoped like the CLI's bulk mode, all through the same gu
    tally. Gates failing → the action is not offered; the key explains why in the CLI's words
    instead.
 2. Confirm (`y`).
-3. Run per space, in order, reporting per-space outcome; a failure does not stop the
-   ones after it, the way the CLI lands a stage partway; re-running is safe because a
-   promotion passes over units already carrying the end tag.
+3. Run: one promote request the server applies per space in upstream order, reporting the
+   per-space outcome; a failure does not stop the spaces after it, and re-running is safe
+   because a promotion passes over units already carrying the end tag.
 4. Reload the ChangeOrder and redraw. Never patch local state.
 
 | Key | Does | cub equivalent |
 |---|---|---|
-| `P` promote stage | dry run the stage first and refuse if anything comes back that the upgrade cannot do (see §5), then `PATCH /unit … upgrade=true&change_order=…` per space, skipping the base | `cub variant promote --change-order <space>/<slug> --target-stage <stage>` |
-| `L` release stage | wait for `awaiting/triggers` to clear on the stage's units (bounded), then `POST /space/{s}/release {TagID: EndTagID}` per space that has a release target; spaces without one are listed as *not releasable* and count as released, per the state machine | `cub release publish --revision ChangeOrder:<space>/<slug> <space>` per space |
+| `P` promote stage | refuse with the server's reason unless the stage is next and the dry run showed no blocker, then `POST /promote` once for the stage with the dry run's `Plan` as `ExpectedPlan`; the server skips the base, clones what a space lacks, and refuses if anything changed since | `cub variant promote --change-order <space>/<slug> --target-stage <stage> --expected-plan <plan>` |
+| `L` release stage | wait for `awaiting/triggers` to clear on the stage's units (bounded), then `POST /space/{s}/release {TagID: EndTagID, ChangeOrderID}` per space that has a release target; spaces without one are listed as *not releasable* and count as released, per the state machine | `cub release publish --revision ChangeOrder:<space>/<slug> <space>` per space |
 | `B` promote and release | `P` then `L` on the same stage; the UI's "Promote and release" | the two above |
 
 Not in the steel thread, shown but not driven: abort (`AbortedReason`), demote/restore,
@@ -148,13 +150,15 @@ which is the audit trail the walkthrough closes on.
 
 ## 4. How it fits the code
 
-- `internal/rollout` (new): pure derivation over fetched rows. `Load(ctx, client, changeOrder)`
-  → `Rollout{Order, Workflow, Component, Stages[]{Name, Prereqs, Spaces[]{Space, Taken,
-  Released, Healthy, Releasable}}, Next, Gates[], Completed}`; `Gates()` mirrors
-  `validateStageEntryGates` and `checkVariantPrerequisites` including messages; `Change()`
-  builds the tag-pair diff for a space; `Preview()` runs the dry run and pairs `ConfigData`
-  with current data; `Promote()`, `Release()` are the writes. All take injected fetchers
-  so the model test can run offline with stubs, as every other loader does.
+- `internal/rollout`: the reading over the server's answers. `Load(ctx, client, cache, row)`
+  → `Rollout{Order (with the Workflow copy, Promotions, Releases), Stages[]{Name, Prereqs,
+  Spaces[]{Space, Taken, Released, Health}}, Next, Gates[], Completed, Plan}`; `derive` only
+  picks the console state from the gates and reads the final tally from the bits; `ChangeIn`
+  is the `unit_diff` per space with the kept fields; `PreviewStage` is the dry run with diffs;
+  `PromoteStage`, `ReleaseStage` are the writes. All take the `Client` interface (`List`,
+  `GetRaw`, `Send`) so the model test runs offline on `MemClient`, whose `promote` stands in
+  for the server over the same rows. `live_test.go` runs the read-only half against a real
+  order when `COMMANDER_ROLLOUT_LIVE_ORDER` is set.
 - `internal/plan`: `rollout [stage <name>]` as a terminal step on a `ChangeOrder` statement;
   `stage()/next()/blocker()` as local computed columns; `CubCommand` prints the promote and
   publish lines for the actions so `^X` is honest. Golden tests as usual.
@@ -162,48 +166,41 @@ which is the audit trail the walkthrough closes on.
   key-routing order after the global chords, like the other modes. Esc goes back to the
   ChangeOrder list. Writes go through a confirm overlay checked before the global switch,
   like the popup and the picker.
-- No new dependency. Caches for workflows and stage membership live on `catalog.Live`
-  next to the label sample and are invalidated by the sampler.
+- No new dependency. Stage membership, release status and the gate dry run are cached per
+  statement (`rollout.Cache`); workflow slugs for the process.
 
 ## 5. Gaps, and what commander does about each
 
-- **Missing units.** The CLI clones units the target lacks (at the start tag, with links)
-  before upgrading. The first cut does not. Before a promote, commander compares the units of
-  the space's *upstream* (its `UpstreamSpaceID` annotation, the class base for a deployment)
-  that carry the start tag against the space's `UpstreamUnitID`s; if any are missing it
-  refuses with the `cub variant promote` line to run instead. Comparing against the root base
-  was the first attempt and flagged every deployment; the tree is hop by hop. The walkthrough
-  never hits this. Cloning is a later milestone, not a shortcut.
-- **Semantic diffs.** A function that rewrites a unit re-serializes the YAML, so a text diff
-  of one image bump showed 54 changed lines. Both the tag diff and the preview compare parsed
-  documents (paired by apiVersion/kind/name, list items by `name`), list the changed fields,
-  and diff a canonical re-encoding; `w` shows the raw text.
-- **Kept (protected) fields.** The dry-run diff shows what changes, so a protected value
-  the merge kept is simply absent, as in the CLI's `-o mutations`; only the Web UI draws it
-  as kept. Step 6 of the walkthrough is told from the base's diff (memory 512Mi → 1Gi) next
-  to test's (image only), which is enough to make the point. `include=MutationSources` may
-  let commander annotate kept paths later.
-- **The base's own diff (F20).** The UI does not draw it; commander does, from the tags,
-  which is the honest source (the start tag is where the variants last took from).
-- **Release pinned to the change order.** The UI publishes the head; commander pins
-  `TagID = EndTagID` like the CLI, so a release describes the change.
-- **Final / completed (F12, F21).** Commander draws *final* as a node and reads completed
-  from `final.prerequisites`, matching `cub changeorder get`.
-- **Healthy gate on a stale observation (F2).** Commander shows the observation's time next
-  to the healthy bit so the reader can see it predates the release; it does not second-guess
-  the gate. The strip's *healthy* count and the ✓ only count a space that has **released** the
-  change (Jesper, 2026-09-05): before that the live status describes the previous state, and
-  "3/3 healthy" on a stage nothing has been promoted to reads as done. Neither commander nor
-  the UI checks that the observation is of the released manifest.
-- **No OR in where.** Start- and end-tag revisions are two list calls, not one.
-- **One row per unit by default.** `/revision` and `/revision_data` keep the newest row per
-  unit unless `distinct_on=Off` (which needs a `limit`). The tag queries want exactly that; the
-  body fetch of a before/after pair does not, and passes Off. Found live 2026-09-05.
+- **Missing units.** The server clones units a space lacks, at the change order's start, and
+  the preview lists them as *would add from upstream*. Nothing to refuse any more.
+- **Semantic diffs.** The server's `ConfigDiff` matches resources and merge-keyed array
+  elements and carries both values per path, with a unified patch for multi-line strings.
+  Commander renders that and nothing else; the raw-text mode (`w`) of the first cut is gone
+  with the local YAML diff it toggled.
+- **Kept (protected) fields.** A path the merge withholds comes back in the unit's
+  `Conflicts` with the server's reason; a path the merge treats as a local override is found
+  by comparing the ordered change (the base's `unit_diff`) with the dry run's diff and the
+  unit's current data, up the UpgradeUnit lineage to the base unit, with protection read from
+  `MutationSources` when the server did not say. Shown loudly as *NOT changed*.
+- **The base's own diff (F20).** `unit_diff` on the base from `Before:ChangeOrder` to
+  `ChangeOrder`; the honest source.
+- **Release pinned to the change order.** `TagID = EndTagID` and `ChangeOrderID` on the
+  publish, like the CLI, so a release describes the change and the order records it.
+- **Final / completed (F12, F21).** `Stage == Completed` is the server's word; the final
+  tally in the strip is commander's live reading of the last stage's bits, since the server
+  evaluates `Final` only on a write.
+- **Healthy gate on a stale observation (F2).** The observation's time and release number
+  sit next to the healthy bit so the reader can see it predates the release; the strip's
+  *healthy* count and the ✓ only count a space that has **released** the change (Jesper,
+  2026-09-05). Whether the observation is of the released manifest is the server's gate to
+  judge, not commander's.
+- **Gates on a stage past the next.** Naming a later stage in the dry run is refused by the
+  gates of the stage in between; the preview says so rather than guessing what the server
+  would plan.
+- **Permissions.** The gate dry run needs `Use` on the ChangeOrder; a reader without it sees
+  the strip and the bits with *Not reported* and the server's message instead of gates.
 - **Naming (Q25).** "Rollout" is the working word here, in the UI text and the `rollout`
   step. Commander is a lab; if the product settles on another word the step is renamed.
-- **Version skew.** Client-side derivation means commander must agree with the server's
-  workflow format (v4, no `Labels.Component` in `whereSpace`). A definition that names the
-  component is reported as the CLI reports it, not silently conjoined.
 
 ## 6. Milestones
 
@@ -213,7 +210,8 @@ which is the audit trail the walkthrough closes on.
 | R2 | Preview | **Shipped 2026-09-05.** A stage not yet taken shows the server's dry run per space: fields each unit would change (semantic, layout-insensitive) and the canonical diff against current data; per-unit errors; a space missing units its upstream carries is a blocker naming them. |
 | R3 | Promote and release | **Shipped 2026-09-05.** `P`: refused with the reason unless the stage is next, the gates are open and the preview has no blockers; the overlay lists spaces, unit and field counts, the PATCH requests and the cub line; `y` runs per space, the reading refreshes, the report opens in the text view. `L`: publishes each space of the stage that has taken the change and has a release target, pinned to the end tag, after polling the `awaiting/triggers` gate off its units (90 s cap); class bases and already-released spaces are skipped and say so. `B`: both, one confirm, the release reading the promote's outcomes as taken. **Live on the Demo org:** catalog-api-5-4-0 promoted to bases and dev and released from dev through commander; the server's revision trail carries the pipeline's description, the change order and its tags; `cub variant promote --dry-run` agrees on the next step. |
 | R4 | Polish | 10 s auto-refresh, home badge, observation time on healthy, abort shown, revision picker `d` inside a space's pane. |
-| R5 | Gated | cloning missing units; kept-field annotation from MutationSources; chapter 2 (refused rollout, abort, demote); anything the spec's Q12 moves server-side. |
+| R5 | API 0.8 | **Shipped 2026-10-06 (unreleased).** Stages, gates and the plan from `POST /promote` dry runs; the change from `unit_diff`; health from `Release.LiveStatus`; cloning by the server; kept fields from `Conflicts`; one promote request with `ExpectedPlan`; releases recorded on the order. Verified read-only against the harbor-financial org (`live_test.go`); a live promote through commander waits for a change order in flight on the demo org. |
+| R6 | Next | chapter 2 (refused rollout, abort, `/demote`); attestations as gates (`ReleasePrerequisites`, `cub attestation create` from the rollout); `PromotionFailures` and overrides drawn in the mode; `Validated` gate surfaced per unit. |
 
 ## 7. Open with Jesper
 

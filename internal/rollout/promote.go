@@ -2,7 +2,9 @@ package rollout
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -10,27 +12,144 @@ import (
 	"github.com/confighub/cub-commander/internal/cubclient"
 )
 
-// Writer is the client surface the actions need on top of Client.
-type Writer interface {
-	Client
-	PatchRows(ctx context.Context, path string, q url.Values, body string) ([]cubclient.Row, int, error)
+// PlanResult is a promote result: what a promotion did, or on a dry run
+// would do, with the gates of every stage it enters. A refusal by the gates
+// (409) is the same shape with Refused set and nothing written.
+type PlanResult struct {
+	DryRun   bool
+	Plan     string // digest of the planned actions; sent back as ExpectedPlan
+	Complete bool   // every stage already has the change
+	Refused  bool   // the gates do not hold
+	Status   int
+	Stages   []StageResult
+	Spaces   []SpaceResult
 }
 
-// UnitPreview is what promoting would do to one unit of one space: the
-// server's dry run of the real upgrade against the unit's current data.
+type StageResult struct {
+	Name, PreviousStage string
+	Chosen, Forced      bool
+	Gates               []Gate
+}
+
+type SpaceResult struct {
+	SpaceID, SpaceSlug                 string
+	UpstreamSpaceID, UpstreamSpaceSlug string
+	Stage                              string
+	Action                             string // Promote, Unchanged, Skipped, Blocked, Failed
+	Reason                             string
+	Units                              []UnitResult
+	Links                              []LinkResult
+}
+
+type UnitResult struct {
+	UnitID, Slug, UpstreamUnitID   string
+	Action                         string // Upgrade, Resolve, Mark, Empty, Revive, Clone, Invoke, Unchanged, Skip
+	Reason                         string
+	Err                            string
+	FromUpstreamRev, ToUpstreamRev int
+	Fields                         []FieldChange // include=Diff
+	Conflicts                      []Conflict
+}
+
+type LinkResult struct {
+	Slug, Action, Reason, Err string
+}
+
+// ParsePlan decodes a promote response of any of its statuses.
+func ParsePlan(status int, body []byte) (*PlanResult, error) {
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, fmt.Errorf("decode promote result: %w", err)
+	}
+	p := &PlanResult{DryRun: m["DryRun"] == true, Plan: str(m["Plan"]), Complete: m["Complete"] == true, Refused: status == http.StatusConflict, Status: status}
+	for _, st := range list(m["Stages"]) {
+		sr := StageResult{Name: str(st["Name"]), PreviousStage: str(st["PreviousStage"]), Chosen: st["Chosen"] == true, Forced: st["Forced"] == true}
+		for _, g := range list(st["Gates"]) {
+			sr.Gates = append(sr.Gates, Gate{Name: str(g["Prerequisite"]), Space: str(g["SpaceSlug"]), OK: g["Satisfied"] == true, Reason: str(g["Message"])})
+		}
+		p.Stages = append(p.Stages, sr)
+	}
+	for _, sp := range list(m["Spaces"]) {
+		s := SpaceResult{SpaceID: str(sp["SpaceID"]), SpaceSlug: str(sp["SpaceSlug"]), UpstreamSpaceID: str(sp["UpstreamSpaceID"]), UpstreamSpaceSlug: str(sp["UpstreamSpaceSlug"]), Stage: str(sp["Stage"]), Action: str(sp["Action"]), Reason: firstNonEmpty(str(sp["Reason"]), errText(sp["Error"]))}
+		for _, u := range list(sp["Units"]) {
+			s.Units = append(s.Units, UnitResult{
+				UnitID: str(u["UnitID"]), Slug: str(u["Slug"]), UpstreamUnitID: str(u["UpstreamUnitID"]),
+				Action: str(u["Action"]), Reason: str(u["Reason"]), Err: errText(u["Error"]),
+				FromUpstreamRev: num(u["FromUpstreamRevisionNum"]), ToUpstreamRev: num(u["ToUpstreamRevisionNum"]),
+				Fields: ParseConfigDiff(u["Diff"]), Conflicts: ParseConflicts(u["Conflicts"]),
+			})
+		}
+		for _, l := range list(sp["Links"]) {
+			s.Links = append(s.Links, LinkResult{Slug: str(l["Slug"]), Action: str(l["Action"]), Reason: str(l["Reason"]), Err: errText(l["Error"])})
+		}
+		p.Spaces = append(p.Spaces, s)
+	}
+	return p, nil
+}
+
+func errText(v any) string {
+	switch e := v.(type) {
+	case map[string]any:
+		return firstNonEmpty(str(e["Message"]), str(e["message"]), str(e["Error"]))
+	case string:
+		return e
+	}
+	return ""
+}
+
+// promote sends one promote request and reads its result, whatever the
+// status: 200 and 207 carry what was done, 409 the gates that refused it.
+func promote(ctx context.Context, c Client, q url.Values, req map[string]any) (*PlanResult, error) {
+	body, _ := json.Marshal(req)
+	status, out, err := c.Send(ctx, http.MethodPost, "/promote", q, "application/json", string(body))
+	switch status {
+	case http.StatusOK, http.StatusMultiStatus, http.StatusConflict:
+		p, perr := ParsePlan(status, out)
+		if perr != nil {
+			if err != nil {
+				return nil, err
+			}
+			return nil, perr
+		}
+		return p, nil
+	case http.StatusPreconditionFailed:
+		return nil, fmt.Errorf("the promotion would now do something different from the dry run (412); R re-runs it")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("promote: unexpected status %d", status)
+}
+
+// gatePlan is the dry run that evaluates the next stage's gates, once per
+// order per run.
+func (c *Cache) gatePlan(ctx context.Context, cl Client, o Order) (*PlanResult, error) {
+	c.mu.Lock()
+	a, ok := c.plans[o.ID]
+	c.mu.Unlock()
+	if ok {
+		return a.plan, a.err
+	}
+	p, err := promote(ctx, cl, nil, map[string]any{"ChangeOrderID": o.ID, "DryRun": true})
+	c.mu.Lock()
+	c.plans[o.ID] = &planAnswer{plan: p, err: err}
+	c.mu.Unlock()
+	return p, err
+}
+
+// ---- preview
+
+// UnitPreview is what promoting would do to one unit of one space.
 type UnitPreview struct {
 	UnitID, Slug string
-	Current      string
-	Would        string
+	Action       string // Upgrade, Clone, Mark, …
+	Reason       string
 	Fields       []FieldChange
-	NormBefore   string
-	NormAfter    string
 	NoChange     bool
+	New          bool // Clone: the space does not have the unit yet
 	Err          string
-	// Kept are the fields the upstream's change touched that this merge
-	// leaves alone: the space's value stays. Protected says a recorded
-	// protection on the path is why; otherwise the merge treated the value
-	// as a local override.
+	// Kept are the fields of the ordered change this merge leaves alone:
+	// the space's value stays, as a local override or a protected path.
 	Kept []KeptField
 }
 
@@ -40,38 +159,61 @@ type KeptField struct {
 	Current   string // what the space keeps
 	Upstream  string // what the upstream changed it to
 	Protected bool
+	Why       string // the server's reason, when it withheld the path
 }
 
-// SpacePreview is one target space of a stage.
+// SpacePreview is one space of the dry run.
 type SpacePreview struct {
 	Space   Space
+	Action  string // Promote, Unchanged, Skipped, Blocked, Failed
+	Reason  string
+	Stage   string
 	Units   []UnitPreview
-	Missing []string // base units the space lacks; the upgrade cannot bring them
-	Err     string
-	Skipped string // why nothing was previewed (the base itself)
+	Links   LinkSummary
+	Err     string // Blocked or Failed: the reason
+	Skipped string // Skipped: the reason
+}
+
+type LinkSummary struct {
+	Create, Adopted   int
+	Skipped, Orphaned []string
 }
 
 // Preview is a stage's dry run.
 type Preview struct {
-	Stage  string
-	Spaces []SpacePreview
+	Stage    string
+	Plan     string
+	Complete bool
+	Refused  bool
+	Gates    []Gate
+	Spaces   []SpacePreview
 }
 
-// Blockers are the reasons a promote of this preview would be refused.
+// Blockers are the reasons a promote of this preview would be refused or
+// would land short.
 func (p *Preview) Blockers() []string {
 	var out []string
-	for _, sp := range p.Spaces {
-		if len(sp.Missing) > 0 {
-			out = append(out, fmt.Sprintf("%s lacks %s; the upgrade cannot clone them (run cub variant promote, which does)", sp.Space.Slug, strings.Join(sp.Missing, ", ")))
+	if p.Refused {
+		for _, g := range p.Gates {
+			if !g.OK {
+				out = append(out, g.Reason)
+			}
 		}
+	}
+	for _, sp := range p.Spaces {
 		if sp.Err != "" {
 			out = append(out, sp.Space.Slug+": "+sp.Err)
+		}
+		for _, u := range sp.Units {
+			if u.Err != "" {
+				out = append(out, sp.Space.Slug+"/"+u.Slug+": "+u.Err)
+			}
 		}
 	}
 	return out
 }
 
-// Changed counts the units the promotion would change.
+// Changed counts the units the promotion would write and the fields that change.
 func (p *Preview) Changed() (units, fields int) {
 	for _, sp := range p.Spaces {
 		for _, u := range sp.Units {
@@ -84,123 +226,78 @@ func (p *Preview) Changed() (units, fields int) {
 	return
 }
 
-const bulkPatchBody = "{}"
-
-func promoteWhere(spaceID string) string {
-	return fmt.Sprintf("SpaceID = '%s' AND UpstreamUnitID IS NOT NULL", spaceID)
-}
-
-func promoteQuery(o Order, spaceID string, dryRun bool) url.Values {
-	q := url.Values{
-		"where":        {promoteWhere(spaceID)},
-		"upgrade":      {"true"},
-		"change_order": {o.ID},
-		"include":      {"UnitEventID,TargetID,UpstreamUnitID,SpaceID"},
-	}
-	if dryRun {
-		q.Set("dry_run", "true")
-		q.Set("include", "ConfigData,MutationSources")
-	}
-	return q
-}
-
-// PreviewStage dry-runs the promotion into every space of one stage, the
-// same request cub variant promote makes with --dry-run, and reads the
-// would-be configuration against the current one. The base is skipped as
-// the CLI skips it. A unit the space lacks is reported as Missing: the
-// upgrade alone does not clone it, so a promote here would land short.
-func PreviewStage(ctx context.Context, c Writer, r *Rollout, stage int) (*Preview, error) {
+// PreviewStage dry-runs the promotion into one stage with include=Diff, the
+// request `cub variant promote --change-order … --target-stage … --dry-run
+// -o mutations` makes, and reads what each unit would change. The ordered
+// change's fields a merge leaves alone are added as Kept.
+func PreviewStage(ctx context.Context, c Client, r *Rollout, stage int) (*Preview, error) {
 	if stage <= 0 || stage >= len(r.Stages) {
 		return nil, fmt.Errorf("no such stage")
 	}
 	st := r.Stages[stage]
-	p := &Preview{Stage: st.Name}
-	covered := map[string]map[string]string{} // upstream space → units carrying the start tag
-	lin, _ := r.lineage(ctx, c)               // nil only when the ordered change cannot be read; kept is then skipped
-	for _, sp := range st.Spaces {
-		out := SpacePreview{Space: sp}
-		if sp.ID == r.Order.SpaceID {
-			out.Skipped = "the space the change order was created in"
-			p.Spaces = append(p.Spaces, out)
-			continue
+	res, err := promote(ctx, c, url.Values{"include": {"Diff"}}, map[string]any{"ChangeOrderID": r.Order.ID, "DryRun": true, "TargetStage": st.Name})
+	if err != nil {
+		return nil, err
+	}
+	p := &Preview{Stage: st.Name, Plan: res.Plan, Complete: res.Complete, Refused: res.Refused}
+	for _, sr := range res.Stages {
+		p.Gates = append(p.Gates, sr.Gates...)
+	}
+	lin, _ := r.lineage(ctx, c) // nil only when the ordered change cannot be read; kept is then skipped
+	byID := map[string]Space{}
+	for _, s := range r.Stages {
+		for _, sp := range s.Spaces {
+			byID[sp.ID] = sp
 		}
-		if sp.Upstream == "" {
-			out.Err = fmt.Sprintf("space %s has no UpstreamSpaceID annotation; only spaces created by 'cub variant create' can be promoted", sp.Slug)
-			p.Spaces = append(p.Spaces, out)
-			continue
-		}
-		baseUnits, ok := covered[sp.Upstream]
+	}
+	for _, sr := range res.Spaces {
+		sp, ok := byID[sr.SpaceID]
 		if !ok {
-			var err error
-			if baseUnits, err = coveredUnits(ctx, c, r.Order, sp.Upstream); err != nil {
-				return nil, err
-			}
-			covered[sp.Upstream] = baseUnits
+			sp = Space{ID: sr.SpaceID, Slug: sr.SpaceSlug, Upstream: sr.UpstreamSpaceID}
 		}
-		// what the space has, and which base units it tracks
-		units, err := c.List(ctx, "/unit", url.Values{"where": {fmt.Sprintf("SpaceID = '%s'", sp.ID)}, "select": {"UnitID,Slug,UpstreamUnitID"}})
-		if err != nil {
-			out.Err = err.Error()
-			p.Spaces = append(p.Spaces, out)
-			continue
+		out := SpacePreview{Space: sp, Action: sr.Action, Reason: sr.Reason, Stage: sr.Stage}
+		switch sr.Action {
+		case "Skipped":
+			out.Skipped = sr.Reason
+		case "Blocked", "Failed":
+			out.Err = sr.Reason
 		}
-		tracked := map[string]bool{}
-		slugs := map[string]string{}
-		for _, row := range units {
-			u := own(row, "Unit")
-			tracked[str(u["UpstreamUnitID"])] = true
-			slugs[str(u["UnitID"])] = str(u["Slug"])
-		}
-		for id, slug := range baseUnits {
-			if !tracked[id] {
-				out.Missing = append(out.Missing, slug)
-			}
-		}
-		sort.Strings(out.Missing)
-		// current data, one call
 		current := map[string]string{}
-		data, err := c.List(ctx, "/unit_data", url.Values{"where": {fmt.Sprintf("SpaceID = '%s'", sp.ID)}})
-		if err != nil {
-			out.Err = err.Error()
-			p.Spaces = append(p.Spaces, out)
-			continue
+		if lin != nil && sr.Action == "Promote" {
+			current, _ = currentData(ctx, c, sr.SpaceID)
 		}
-		for _, row := range data {
-			current[str(row["UnitID"])] = str(row["Data"])
-		}
-		// the dry run
-		rows, _, err := c.PatchRows(ctx, "/unit", promoteQuery(r.Order, sp.ID, true), bulkPatchBody)
-		if err != nil {
-			out.Err = err.Error()
-			p.Spaces = append(p.Spaces, out)
-			continue
-		}
-		for _, row := range rows {
-			u := own(row, "Unit")
-			up := UnitPreview{UnitID: str(u["UnitID"]), Slug: firstNonEmpty(str(u["Slug"]), slugs[str(u["UnitID"])]), Would: str(row["ConfigData"])}
-			up.Current = current[up.UnitID]
-			if e, ok := row["Error"].(map[string]any); ok && e != nil {
-				up.Err = firstNonEmpty(str(e["Message"]), str(e["message"]), "error")
+		for _, u := range sr.Units {
+			up := UnitPreview{UnitID: u.UnitID, Slug: u.Slug, Action: u.Action, Reason: u.Reason, Fields: u.Fields, Err: u.Err}
+			switch u.Action {
+			case "Unchanged", "Skip", "Mark":
+				up.NoChange = true
+			case "Clone":
+				up.New = true
+			default:
+				up.NoChange = len(u.Fields) == 0 && u.Reason == "NoChange"
 			}
-			if up.Err == "" {
-				if up.Would == "" || up.Would == up.Current {
-					up.NoChange = true
-				} else {
-					up.Fields, up.NormBefore, up.NormAfter, _ = Semantic(up.Current, up.Would)
-					if len(up.Fields) == 0 {
-						up.NoChange = true // layout only
-					}
-				}
-				// kept: the ordered change's fields this merge does not bring
-				if lin != nil {
-					if root, ok := lin.rootChange(ctx, c, r, sp.ID, up.UnitID); ok {
-						up.Kept = keptFields(root.Fields, up.Fields, up.Current, protectedPaths(row["MutationSources"]))
-					}
+			if up.Err == "" && lin != nil && !up.New && sr.Action == "Promote" {
+				if root, ok := lin.rootChange(ctx, c, r, sr.SpaceID, u.UnitID); ok {
+					up.Kept = keptFields(root.Fields, u.Fields, current[u.UnitID], u.Conflicts, func() map[string]map[string]bool {
+						return unitProtection(ctx, c, sr.SpaceID, u.UnitID)
+					})
 				}
 			}
 			out.Units = append(out.Units, up)
 		}
-		sort.Slice(out.Units, func(i, j int) bool {
+		for _, l := range sr.Links {
+			switch {
+			case l.Action == "Create":
+				out.Links.Create++
+			case l.Action == "Unchanged" && l.Reason == "Adopted":
+				out.Links.Adopted++
+			case l.Action == "Skip":
+				out.Links.Skipped = append(out.Links.Skipped, l.Slug+": "+l.Reason)
+			case l.Action == "Orphaned":
+				out.Links.Orphaned = append(out.Links.Orphaned, l.Slug)
+			}
+		}
+		sort.SliceStable(out.Units, func(i, j int) bool {
 			ci, cj := !out.Units[i].NoChange || len(out.Units[i].Kept) > 0, !out.Units[j].NoChange || len(out.Units[j].Kept) > 0
 			if ci != cj {
 				return ci
@@ -212,12 +309,25 @@ func PreviewStage(ctx context.Context, c Writer, r *Rollout, stage int) (*Previe
 	return p, nil
 }
 
-// keptFields are the upstream's field changes the merge does not carry into
-// this unit: not among the fields the dry run changes, and the current value
-// is not already the upstream's. Protection is looked up by resource and
-// resolved path in the unit's MutationSources; a path whose ancestor is
-// protected counts too.
-func keptFields(upstream, would []FieldChange, current string, protected map[string]map[string]bool) []KeptField {
+// currentData reads a space's unit data in one call, by unit ID.
+func currentData(ctx context.Context, c Client, spaceID string) (map[string]string, error) {
+	rows, err := c.List(ctx, "/unit_data", url.Values{"where": {fmt.Sprintf("SpaceID = '%s'", spaceID)}})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, row := range rows {
+		out[str(row["UnitID"])] = str(row["Data"])
+	}
+	return out, nil
+}
+
+// keptFields are the ordered change's field changes the merge does not
+// carry into this unit: not among the fields the dry run changes, and the
+// current value is not already the upstream's. A path the server withheld
+// (Conflicts) is protected and says why; otherwise protection is looked up
+// in the unit's MutationSources, lazily, since most units keep nothing.
+func keptFields(upstream, would []FieldChange, current string, conflicts []Conflict, protection func() map[string]map[string]bool) []KeptField {
 	if len(upstream) == 0 {
 		return nil
 	}
@@ -225,13 +335,18 @@ func keptFields(upstream, would []FieldChange, current string, protected map[str
 	for _, f := range would {
 		changing[f.Doc+"|"+f.Path] = true
 	}
+	withheld := map[string]Conflict{}
+	for _, c := range conflicts {
+		withheld[c.Doc+"|"+c.Path] = c
+	}
 	values, _ := Values(current)
 	var out []KeptField
+	var prot map[string]map[string]bool
 	for _, f := range upstream {
-		if changing[f.Doc+"|"+f.Path] {
+		if f.Path == "" || changing[f.Doc+"|"+f.Path] {
 			continue
 		}
-		cur := values[f.Doc][f.Path]
+		cur := values[f.Doc][f.Local]
 		if cur == f.After {
 			continue // already there
 		}
@@ -239,34 +354,26 @@ func keptFields(upstream, would []FieldChange, current string, protected map[str
 			continue // the upstream removed it; not a kept value in the sense that matters here
 		}
 		k := KeptField{Doc: f.Doc, Path: f.Path, Current: cur, Upstream: f.After}
-		k.Protected = isProtected(k, protected)
+		if c, ok := withheld[f.Doc+"|"+f.Resolved]; ok {
+			k.Protected, k.Why = true, firstNonEmpty(c.Reason, c.Details)
+		} else {
+			if prot == nil && protection != nil {
+				prot = protection()
+			}
+			k.Protected = isProtected(f, prot)
+		}
 		out = append(out, k)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Doc+out[i].Path < out[j].Doc+out[j].Path })
 	return out
 }
 
-// protectedPaths reads a MutationSources list into resource key
-// ("apiVersion/Kind namespace/name", "" when unknown) → protected paths.
+// protectedPaths reads a MutationSources list into resource key → protected
+// paths, keyed the way the server names resources ("" when unknown).
 func protectedPaths(v any) map[string]map[string]bool {
 	out := map[string]map[string]bool{}
-	list, _ := v.([]any)
-	for _, item := range list {
-		rm, _ := item.(map[string]any)
-		if rm == nil {
-			continue
-		}
-		res, _ := rm["Resource"].(map[string]any)
-		key := ""
-		if res != nil {
-			t, n := str(res["ResourceType"]), str(res["ResourceName"])
-			if t != "" {
-				key = t
-				if n != "" {
-					key += " " + n
-				}
-			}
-		}
+	for _, rm := range list(v) {
+		key := docName(rm["Resource"])
 		pm, _ := rm["PathMutationMap"].(map[string]any)
 		for path, mi := range pm {
 			m, _ := mi.(map[string]any)
@@ -281,102 +388,137 @@ func protectedPaths(v any) map[string]map[string]bool {
 	return out
 }
 
-// coveredUnits is the set of units of one upstream space the change order
-// covers (they carry its start tag), by ID → slug. A downstream space must
-// track each of them for an upgrade alone to bring the whole change; the
-// CLI clones the rest, which this preview only reports.
-func coveredUnits(ctx context.Context, c Client, o Order, upstreamSpaceID string) (map[string]string, error) {
-	rows, err := c.List(ctx, "/revision", url.Values{
-		"where":   {fmt.Sprintf("SpaceID = '%s' AND Tags ? '%s'", upstreamSpaceID, o.StartTagID)},
-		"select":  {"RevisionID,UnitID,Unit.Slug"},
-		"include": {"UnitID"},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("base units: %w", err)
-	}
-	out := map[string]string{}
-	for _, row := range rows {
-		rv := own(row, "Revision")
-		id := str(rv["UnitID"])
-		slug := id
-		if u, ok := row["Unit"].(map[string]any); ok && str(u["Slug"]) != "" {
-			slug = str(u["Slug"])
+// isProtected says whether a recorded protection covers a path: the same
+// resolved path, or an ancestor of it.
+func isProtected(f FieldChange, protected map[string]map[string]bool) bool {
+	for res, paths := range protected {
+		if res != "" && f.Doc != "" && res != f.Doc {
+			continue
 		}
-		out[id] = slug
+		for p := range paths {
+			for _, mp := range []string{f.Resolved, f.Path} {
+				if mp == p || len(mp) > len(p) && strings.HasPrefix(mp, p) && mp[len(p)] == '.' {
+					return true
+				}
+			}
+		}
 	}
-	return out, nil
+	return false
 }
+
+// ---- promote
 
 // Outcome is what one space's promotion did.
 type Outcome struct {
 	Space   Space
-	Status  int
-	Units   int      // responses
-	Changed int      // responses with a new revision (no error)
-	Errors  []string // per-unit errors, slug: message
-	Err     string   // the call itself failed
-	Skipped string
+	Action  string // Promote, Unchanged, Skipped, Blocked, Failed
+	Reason  string
+	Units   int      // units the server acted on
+	Changed int      // units written: upgraded, cloned, emptied, revived, invoked, resolved
+	Marked  int      // units covered but carrying no change
+	Added   []string // clones
+	Errors  []string // per-unit and per-link errors, slug: message
+	Err     string   // the space was Blocked or Failed
+	Skipped string   // why nothing was done (the base itself, out of scope)
 }
 
-// PromoteStage runs the promotion into every space of a stage, one space at
-// a time as cub variant promote does: a failure is reported and the spaces
-// after it are still promoted. Gates are the caller's business (checked on a
-// fresh reading immediately before); the server passes over units already
-// carrying the end tag, so running it again is safe.
-func PromoteStage(ctx context.Context, c Writer, r *Rollout, stage int) ([]Outcome, error) {
+// PromoteStage promotes the change into one stage: one request, which the
+// server runs space by space in upstream order, continuing past a failure
+// and refusing with the gates before writing anything. expectedPlan is the
+// Plan of the dry run the reader saw; the server refuses (412) when it would
+// now do anything different. The result is also returned so a caller can
+// read the gates of a refusal.
+func PromoteStage(ctx context.Context, c Client, r *Rollout, stage int, expectedPlan string) ([]Outcome, *PlanResult, error) {
 	if stage <= 0 || stage >= len(r.Stages) {
-		return nil, fmt.Errorf("no such stage")
+		return nil, nil, fmt.Errorf("no such stage")
+	}
+	req := map[string]any{"ChangeOrderID": r.Order.ID, "TargetStage": r.Stages[stage].Name}
+	if expectedPlan != "" {
+		req["ExpectedPlan"] = expectedPlan
+	}
+	res, err := promote(ctx, c, nil, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	if res.Refused {
+		var reasons []string
+		for _, st := range res.Stages {
+			for _, g := range st.Gates {
+				if !g.OK {
+					reasons = append(reasons, g.Reason)
+				}
+			}
+		}
+		return nil, res, fmt.Errorf("promote refused by the gates: %s", strings.Join(reasons, "; "))
+	}
+	byID := map[string]Space{}
+	for _, s := range r.Stages {
+		for _, sp := range s.Spaces {
+			byID[sp.ID] = sp
+		}
 	}
 	var out []Outcome
-	for _, sp := range r.Stages[stage].Spaces {
-		o := Outcome{Space: sp}
-		if sp.ID == r.Order.SpaceID {
-			o.Skipped = "the space the change order was created in"
-			out = append(out, o)
-			continue
+	for _, sr := range res.Spaces {
+		sp, ok := byID[sr.SpaceID]
+		if !ok {
+			sp = Space{ID: sr.SpaceID, Slug: sr.SpaceSlug}
 		}
-		rows, status, err := c.PatchRows(ctx, "/unit", promoteQuery(r.Order, sp.ID, false), bulkPatchBody)
-		o.Status = status
-		if err != nil {
-			o.Err = err.Error()
-			out = append(out, o)
-			continue
+		o := Outcome{Space: sp, Action: sr.Action, Reason: sr.Reason}
+		switch sr.Action {
+		case "Skipped":
+			o.Skipped = sr.Reason
+		case "Blocked", "Failed":
+			o.Err = sr.Reason
 		}
-		o.Units = len(rows)
-		for _, row := range rows {
-			u := own(row, "Unit")
-			if e, ok := row["Error"].(map[string]any); ok && e != nil {
-				o.Errors = append(o.Errors, str(u["Slug"])+": "+firstNonEmpty(str(e["Message"]), str(e["message"]), "error"))
+		for _, u := range sr.Units {
+			if u.Err != "" {
+				o.Errors = append(o.Errors, u.Slug+": "+u.Err)
 				continue
 			}
-			o.Changed++
+			switch u.Action {
+			case "Unchanged", "Skip":
+				continue
+			case "Mark":
+				o.Marked++
+			case "Clone":
+				o.Changed++
+				o.Added = append(o.Added, u.Slug)
+			default:
+				o.Changed++
+			}
+			o.Units++
+		}
+		for _, l := range sr.Links {
+			if l.Err != "" {
+				o.Errors = append(o.Errors, "link "+l.Slug+": "+l.Err)
+			}
 		}
 		out = append(out, o)
 	}
-	return out, nil
+	return out, res, nil
 }
 
 // PromoteCommands are the CLI lines a promote of this stage stands for.
-func PromoteCommands(r *Rollout, stage int) []string {
+func PromoteCommands(r *Rollout, stage int, expectedPlan string) []string {
 	if stage <= 0 || stage >= len(r.Stages) {
 		return nil
 	}
-	return []string{fmt.Sprintf("cub variant promote --change-order %s --target-stage %s", r.Order.Ref(), r.Stages[stage].Name)}
+	line := fmt.Sprintf("cub variant promote --change-order %s --target-stage %s", r.Order.Ref(), r.Stages[stage].Name)
+	if expectedPlan != "" {
+		line += " --expected-plan " + expectedPlan
+	}
+	return []string{line}
 }
 
-// own returns the entity map of an entity-keyed row, or the row itself.
-func own(row cubclient.Row, entity string) map[string]any {
-	if m, ok := row[entity].(map[string]any); ok {
-		return m
+// PromoteRequest is the request body a promote of this stage sends, for
+// showing before the confirm.
+func PromoteRequest(r *Rollout, stage int, expectedPlan string) string {
+	req := map[string]any{"ChangeOrderID": r.Order.ID, "TargetStage": r.Stages[stage].Name}
+	if expectedPlan != "" {
+		req["ExpectedPlan"] = expectedPlan
 	}
-	return row
+	b, _ := json.Marshal(req)
+	return string(b)
 }
 
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
+var _ = cubclient.Row{} // the package keeps rows as cubclient keeps them

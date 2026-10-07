@@ -44,7 +44,8 @@ var RolloutColumns = map[string]bool{"state": true, "stage": true, "next": true,
 
 // rolloutFields are the ChangeOrder attributes the derivation reads.
 var rolloutFields = []string{"Slug", "SpaceID", "Space.Slug", "Description", "State", "AbortedReason", "CreatedAt",
-	"StartTagID", "EndTagID", "InScopeSpaceIDs", "ResolvedSpaceIDs", "ReleasedSpaceIDs", "Annotations", "SkippedUnits"}
+	"StartTagID", "EndTagID", "InScopeSpaceIDs", "ResolvedSpaceIDs", "ReleasedSpaceIDs", "SkippedUnits",
+	"Stage", "UpdateType", "ChangeWorkflowID", "ChangeWorkflow", "Promotions", "PromotionFailures", "PromotionOverrides", "Releases"}
 
 // DiffPlan is two list stages sharing the common where, one per side.
 type DiffPlan struct {
@@ -583,10 +584,11 @@ func (p *Plan) Explain(spaceID string) string {
 		n++
 	}
 	if p.Rollout != nil {
-		fmt.Fprintf(&b, "  %d. read the ChangeWorkflow revision the change order pins\n     GET /api/unit?where=UnitID = '…'   then   cub unit data <workflow> --revision <n>\n", n)
-		fmt.Fprintf(&b, "  %d. resolve each stage's spaces\n     cub space list --where \"<stage.whereSpace> AND Labels.Component = '<component>'\"   filtered to InScopeSpaceIDs\n", n+1)
-		fmt.Fprintf(&b, "  %d. derive taken/released from ResolvedSpaceIDs/ReleasedSpaceIDs, healthy from the space's live-status annotation; next stage and gates as cub variant promote checks them\n     local\n", n+2)
-		fmt.Fprintf(&b, "  %d. the change per space: revisions carrying the start and end tags\n     cub revision list --space '*' --where \"SpaceID = '…' AND Tags ? '<tag>'\"   (twice: the where language has no OR)   then   GET /api/revision_data?where=RevisionID IN (…)\n", n+3)
+		fmt.Fprintf(&b, "  %d. read the change order with the ChangeWorkflow copy it carries, its Stage, Promotions and Releases\n     cub changeorder get <slug> --space <space>\n", n)
+		fmt.Fprintf(&b, "  %d. resolve each stage's spaces: the stage's selector intersected with InScopeSpaceIDs, as the server does\n     cub space list --where \"<stage.WhereSpace> AND SpaceID IN (<InScopeSpaceIDs>)\"\n", n+1)
+		fmt.Fprintf(&b, "  %d. taken/released from ResolvedSpaceIDs/ReleasedSpaceIDs; healthy from the LiveStatus of each space's latest published Release\n     cub release list --where \"Published = true AND SpaceID IN (…)\"\n", n+2)
+		fmt.Fprintf(&b, "  %d. the next stage and its gates, every (prerequisite, space) pair, from the server's dry run\n     cub variant promote --change-order <space>/<slug> --dry-run   (POST /api/promote {DryRun: true})\n", n+3)
+		fmt.Fprintf(&b, "  %d. the change per space, path by path with both values\n     GET /api/unit_diff?where=SpaceID = '…'&from=Before:ChangeOrder:<id>&to=ChangeOrder:<id>\n", n+4)
 	}
 	return b.String()
 }

@@ -51,20 +51,14 @@ func Run(sess plan.Session, evidence scout.Config) error {
 		return exec.SaveUnitData(ctx, client, row, text, ifMatch, editDescription)
 	}
 	m.changeLoader = func(ctx context.Context, ro *rollout.Rollout, spaceID string) ([]rollout.UnitChange, error) {
-		if spaceID == ro.Order.SpaceID {
-			return rollout.OrderedChange(ctx, client, ro)
-		}
-		ch, err := rollout.Change(ctx, client, ro.Order, spaceID)
-		if err != nil {
-			return nil, err
-		}
-		return rollout.WithKept(ctx, client, ro, spaceID, ch), nil
+		return rollout.ChangeIn(ctx, client, ro, spaceID)
 	}
 	m.previewLoader = func(ctx context.Context, ro *rollout.Rollout, stage int) (*rollout.Preview, error) {
 		return rollout.PreviewStage(ctx, client, ro, stage)
 	}
-	m.promoter = func(ctx context.Context, ro *rollout.Rollout, stage int) ([]rollout.Outcome, error) {
-		return rollout.PromoteStage(ctx, client, ro, stage)
+	m.promoter = func(ctx context.Context, ro *rollout.Rollout, stage int, plan string) ([]rollout.Outcome, error) {
+		out, _, err := rollout.PromoteStage(ctx, client, ro, stage, plan)
+		return out, err
 	}
 	m.releaser = func(ctx context.Context, ro *rollout.Rollout, stage int, promoted []rollout.Outcome) ([]rollout.ReleaseOutcome, error) {
 		return rollout.ReleaseStage(ctx, client, rollout.AfterPromote(ro, promoted), stage)

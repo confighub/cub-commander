@@ -1,55 +1,16 @@
 package rollout
 
 import (
-	"bytes"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// FieldChange is one path whose value differs between two configurations.
-// Before or After is empty when the path exists on one side only.
-type FieldChange struct {
-	Doc    string // apiVersion/kind name, "" for a document without them
-	Path   string // spec.template.spec.containers[name=api].image
-	Before string
-	After  string
-}
-
-func (f FieldChange) String() string {
-	p := f.Path
-	if f.Doc != "" {
-		p = f.Doc + " " + p
-	}
-	switch {
-	case f.Before == "":
-		return "+ " + p + ": " + f.After
-	case f.After == "":
-		return "- " + p + ": " + f.Before
-	}
-	return p + ": " + f.Before + " → " + f.After
-}
-
-// Semantic compares two YAML streams as configuration rather than as text.
-// It returns the field changes, and both sides re-encoded canonically (two
-// space indent, sequences indented) so a text diff of them shows only what
-// changed and not how a tool chose to lay the file out. FormattingOnly is
-// true when the texts differ but no field does.
-func Semantic(before, after string) (fields []FieldChange, normBefore, normAfter string, formattingOnly bool) {
-	a, errA := parseDocs(before)
-	b, errB := parseDocs(after)
-	if errA != nil || errB != nil {
-		// Not YAML (or not parseable): fall back to the text as it is.
-		return nil, before, after, false
-	}
-	normBefore, normAfter = encodeDocs(a), encodeDocs(b)
-	fields = diffDocs(a, b)
-	formattingOnly = len(fields) == 0 && before != after
-	return
-}
+// Values flattens a YAML stream to document key → path → scalar, keyed the
+// way FieldChange.Local names paths, for looking a field up in a unit's
+// current data. The server diffs; this only reads one side.
 
 type doc struct {
 	key  string
@@ -77,7 +38,7 @@ func parseDocs(text string) ([]doc, error) {
 }
 
 // docKey names a document by apiVersion/kind and namespace/name when it has
-// them, which is how the two sides are paired.
+// them, the way the server's ResourceInfo names resources.
 func docKey(n *yaml.Node) string {
 	root := n
 	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
@@ -116,84 +77,8 @@ func docKey(n *yaml.Node) string {
 	return key
 }
 
-func encodeDocs(docs []doc) string {
-	var b bytes.Buffer
-	for i, d := range docs {
-		if i > 0 {
-			b.WriteString("---\n")
-		}
-		enc := yaml.NewEncoder(&b)
-		enc.SetIndent(2)
-		if err := enc.Encode(d.node); err != nil {
-			b.WriteString("# " + err.Error() + "\n")
-		}
-		enc.Close()
-	}
-	return b.String()
-}
-
-// diffDocs pairs documents by key (falling back to position for unkeyed
-// ones) and diffs the flattened scalars of each pair.
-func diffDocs(a, b []doc) []FieldChange {
-	var out []FieldChange
-	usedB := map[int]bool{}
-	pair := func(i int, da doc) (int, bool) {
-		if da.key != "" {
-			for j, db := range b {
-				if !usedB[j] && db.key == da.key {
-					return j, true
-				}
-			}
-			return 0, false
-		}
-		if i < len(b) && !usedB[i] && b[i].key == "" {
-			return i, true
-		}
-		return 0, false
-	}
-	for i, da := range a {
-		j, ok := pair(i, da)
-		if !ok {
-			for p, v := range flatten(da.node) {
-				out = append(out, FieldChange{Doc: da.key, Path: p, Before: v})
-			}
-			continue
-		}
-		usedB[j] = true
-		fa, fb := flatten(da.node), flatten(b[j].node)
-		paths := map[string]bool{}
-		for p := range fa {
-			paths[p] = true
-		}
-		for p := range fb {
-			paths[p] = true
-		}
-		for p := range paths {
-			if fa[p] != fb[p] {
-				out = append(out, FieldChange{Doc: da.key, Path: p, Before: fa[p], After: fb[p]})
-			}
-		}
-	}
-	for j, db := range b {
-		if usedB[j] {
-			continue
-		}
-		for p, v := range flatten(db.node) {
-			out = append(out, FieldChange{Doc: db.key, Path: p, After: v})
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Doc != out[j].Doc {
-			return out[i].Doc < out[j].Doc
-		}
-		return out[i].Path < out[j].Path
-	})
-	return out
-}
-
 // flatten maps every scalar's path to its value. A sequence item that is a
-// mapping with a name is addressed as [name=x], the way the CLI's associative
-// paths do, so a reordered list does not read as every field changing.
+// mapping with a name is addressed as [name=x], the rest by index.
 func flatten(n *yaml.Node) map[string]string {
 	out := map[string]string{}
 	var walk func(n *yaml.Node, path string)
@@ -236,8 +121,7 @@ func flatten(n *yaml.Node) map[string]string {
 	return out
 }
 
-// Values flattens a YAML stream to document key → path → scalar, the same
-// keys and paths Semantic reports, for looking a field up in one side.
+// Values flattens a YAML stream to document key → path → scalar.
 func Values(text string) (map[string]map[string]string, error) {
 	docs, err := parseDocs(text)
 	if err != nil {
@@ -248,29 +132,4 @@ func Values(text string) (map[string]map[string]string, error) {
 		out[d.key] = flatten(d.node)
 	}
 	return out, nil
-}
-
-// MutationPath renders one of Semantic's paths the way MutationSources key
-// theirs: list items by name become `.?name=x`, by index `.N`.
-func MutationPath(p string) string {
-	var b strings.Builder
-	for i := 0; i < len(p); i++ {
-		if p[i] != '[' {
-			b.WriteByte(p[i])
-			continue
-		}
-		j := strings.IndexByte(p[i:], ']')
-		if j < 0 {
-			b.WriteString(p[i:])
-			break
-		}
-		inner := p[i+1 : i+j]
-		if strings.Contains(inner, "=") {
-			b.WriteString(".?" + inner)
-		} else {
-			b.WriteString("." + inner)
-		}
-		i += j
-	}
-	return b.String()
 }

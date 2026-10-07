@@ -180,7 +180,7 @@ func TestRolloutPlan(t *testing.T) {
 		t.Errorf("rollout columns not planned: %+v", p.Local)
 	}
 	sel := strings.Join(p.List.Select, ",")
-	for _, f := range []string{"Annotations", "ResolvedSpaceIDs", "ReleasedSpaceIDs", "StartTagID", "EndTagID", "InScopeSpaceIDs", "Space.Slug"} {
+	for _, f := range []string{"ChangeWorkflow", "Stage", "Promotions", "Releases", "ResolvedSpaceIDs", "ReleasedSpaceIDs", "StartTagID", "EndTagID", "InScopeSpaceIDs", "Space.Slug"} {
 		if !strings.Contains(sel, f) {
 			t.Errorf("select lacks %s: %s", f, sel)
 		}

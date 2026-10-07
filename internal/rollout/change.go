@@ -2,96 +2,54 @@ package rollout
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
-	"strings"
+	"sync"
 )
 
-// UnitChange is what a ChangeOrder did to one unit in one space: the revision
-// its start tag marks against the one its end tag marks. In the base that is
-// the ordered change itself (the start tag is where the variants last took
-// from, the end tag the head when the order was cut); in a space that has
-// taken the change it is what the promotion wrote there (the start tag goes
-// on the head before the merge, the end tag on the revision it arrives at).
-// A unit whose two tags land on the same revision is covered but untouched.
+// UnitChange is what a ChangeOrder did to one unit in one space: the
+// revision its start tag marks against the one its end tag marks, as the
+// server diffs them. In the base that is the ordered change itself; in a
+// space that has taken the change it is what the promotion wrote there. A
+// unit whose two tags land on the same revision is covered but untouched.
 type UnitChange struct {
 	UnitID, Slug     string
 	StartRev, EndRev int
-	StartID, EndID   string
-	Before, After    string
 	Touched          bool
 	Err              string
-	// The change read as configuration (Semantic): the fields that differ,
-	// both sides canonically re-encoded, and whether only layout changed.
-	Fields                []FieldChange
-	NormBefore, NormAfter string
-	FormattingOnly        bool
-	// Kept are the ordered change's fields this space did not take (WithKept).
+	Fields           []FieldChange
+	// Kept are the ordered change's fields this space did not take (ChangeIn).
 	Kept []KeptField
 }
 
-// Change reads the tag pair for every unit of one space. Two list calls (the
-// where language has no OR) and one revision_data call for the bodies of the
-// touched units.
-func Change(ctx context.Context, c Client, o Order, spaceID string) ([]UnitChange, error) {
-	byUnit := map[string]*UnitChange{}
-	load := func(tagID string, set func(u *UnitChange, id string, num int)) error {
-		if tagID == "" {
-			return nil
-		}
-		rows, err := c.List(ctx, "/revision", url.Values{
-			"where":   {fmt.Sprintf("SpaceID = '%s' AND Tags ? '%s'", spaceID, tagID)},
-			"select":  {"RevisionID,UnitID,RevisionNum,Unit.Slug"},
-			"include": {"UnitID"},
-		})
-		if err != nil {
-			return err
-		}
-		for _, row := range rows {
-			rv, _ := row["Revision"].(map[string]any)
-			if rv == nil {
-				rv = row
-			}
-			uid := str(rv["UnitID"])
-			u := byUnit[uid]
-			if u == nil {
-				u = &UnitChange{UnitID: uid}
-				byUnit[uid] = u
-			}
-			if un, ok := row["Unit"].(map[string]any); ok && u.Slug == "" {
-				u.Slug = str(un["Slug"])
-			}
-			num := 0
-			if f, ok := rv["RevisionNum"].(float64); ok {
-				num = int(f)
-			}
-			set(u, str(rv["RevisionID"]), num)
-		}
-		return nil
+// Change reads the change order's change in one space: one unit_diff call
+// from the revisions before the order to the ones it arrived at, which is
+// `cub unit diff` over Before:ChangeOrder and ChangeOrder for every unit.
+// Units the order does not cover there (no tag on either side) are left out.
+func Change(ctx context.Context, c Client, o Order, spaceID string, names map[string]unitInfo) ([]UnitChange, error) {
+	rows, err := c.List(ctx, "/unit_diff", url.Values{
+		"where": {fmt.Sprintf("SpaceID = '%s'", spaceID)},
+		"from":  {"Before:ChangeOrder:" + o.ID},
+		"to":    {"ChangeOrder:" + o.ID},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("the change in the space: %w", err)
 	}
-	if err := load(o.StartTagID, func(u *UnitChange, id string, n int) { u.StartID, u.StartRev = id, n }); err != nil {
-		return nil, fmt.Errorf("start tag: %w", err)
-	}
-	if err := load(o.EndTagID, func(u *UnitChange, id string, n int) { u.EndID, u.EndRev = id, n }); err != nil {
-		return nil, fmt.Errorf("end tag: %w", err)
-	}
-	var want []string
 	var out []UnitChange
-	for _, u := range byUnit {
-		u.Touched = u.StartID != u.EndID
-		if u.Slug == "" {
-			u.Slug = u.UnitID
+	for _, row := range rows {
+		u := UnitChange{UnitID: str(row["UnitID"]), StartRev: num(row["FromRevisionNum"]), EndRev: num(row["ToRevisionNum"]), Err: errText(row["Error"])}
+		if u.StartRev == 0 && u.EndRev == 0 && u.Err == "" {
+			continue // not covered here
 		}
-		if u.Touched {
-			if u.StartID != "" {
-				want = append(want, u.StartID)
-			}
-			if u.EndID != "" {
-				want = append(want, u.EndID)
-			}
+		u.Slug = firstNonEmpty(names[u.UnitID].Slug, u.UnitID)
+		u.Touched = u.StartRev != u.EndRev
+		u.Fields = ParseConfigDiff(row["Diff"])
+		if u.Touched && len(u.Fields) == 0 && u.Err == "" {
+			u.Err = ""
 		}
-		out = append(out, *u)
+		out = append(out, u)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Touched != out[j].Touched {
@@ -99,53 +57,159 @@ func Change(ctx context.Context, c Client, o Order, spaceID string) ([]UnitChang
 		}
 		return out[i].Slug < out[j].Slug
 	})
-	if len(want) == 0 {
-		return out, nil
-	}
-	data, err := RevisionData(ctx, c, want)
-	if err != nil {
-		return nil, err
-	}
-	for i := range out {
-		if !out[i].Touched {
-			continue
-		}
-		out[i].Before = data[out[i].StartID]
-		out[i].After = data[out[i].EndID]
-		if out[i].StartID != "" && out[i].Before == "" || out[i].EndID != "" && out[i].After == "" {
-			out[i].Err = "revision data missing"
-			continue
-		}
-		out[i].Fields, out[i].NormBefore, out[i].NormAfter, out[i].FormattingOnly = Semantic(out[i].Before, out[i].After)
-	}
 	return out, nil
 }
 
-// RevisionData fetches the bodies of revisions by ID in one call, in batches.
-//
-// The org-wide revision endpoints keep one row per unit unless told
-// otherwise (distinct_on=Off, which then demands a limit); a before/after
-// pair is two revisions of one unit, so Off it is.
-func RevisionData(ctx context.Context, c Client, ids []string) (map[string]string, error) {
-	out := map[string]string{}
-	const batch = 100
-	for start := 0; start < len(ids); start += batch {
-		end := min(start+batch, len(ids))
-		quoted := make([]string, 0, end-start)
-		for _, id := range ids[start:end] {
-			quoted = append(quoted, "'"+id+"'")
-		}
-		rows, err := c.List(ctx, "/revision_data", url.Values{
-			"where":       {"RevisionID IN (" + strings.Join(quoted, ", ") + ")"},
-			"distinct_on": {"Off"},
-			"limit":       {fmt.Sprint(len(quoted))},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("revision data: %w", err)
-		}
-		for _, row := range rows {
-			out[str(row["RevisionID"])] = str(row["Data"])
+// The reference for "kept" is the ordered change itself -- what the change
+// order did in the base -- not the space's immediate upstream. A class base
+// that kept a protected value passes an upstream change that no longer
+// mentions it, so a deployment compared with its class base would see
+// nothing kept while the reviewer, who is rolling out the base's change,
+// very much wants to. Each unit is followed up its UpgradeUnit lineage to
+// the base unit, and the base unit's field changes are the reference.
+
+type unitInfo struct {
+	Slug, Upstream string
+}
+
+// lineage caches, per Rollout, what following units to the base needs.
+type lineage struct {
+	mu       sync.Mutex
+	list     []UnitChange                   // the ordered change, as Change returns it
+	ordered  map[string]UnitChange          // base unit ID → the ordered change
+	units    map[string]map[string]unitInfo // space ID → unit ID → info
+	upstream map[string]string              // space ID → upstream space ID
+}
+
+func (r *Rollout) lineage(ctx context.Context, c Client) (*lineage, error) {
+	if r.lc == nil {
+		r.lc = &lineageCache{}
+	}
+	r.lc.mu.Lock()
+	defer r.lc.mu.Unlock()
+	if r.lc.lin != nil {
+		return r.lc.lin, nil
+	}
+	l := &lineage{units: map[string]map[string]unitInfo{}, upstream: map[string]string{}, ordered: map[string]UnitChange{}}
+	for _, st := range r.Stages {
+		for _, sp := range st.Spaces {
+			l.upstream[sp.ID] = sp.Upstream
 		}
 	}
-	return out, nil
+	names, err := l.spaceUnits(ctx, c, r.Order.SpaceID)
+	if err != nil {
+		return nil, fmt.Errorf("the base's units: %w", err)
+	}
+	changes, err := Change(ctx, c, r.Order, r.Order.SpaceID, names)
+	if err != nil {
+		return nil, fmt.Errorf("the ordered change: %w", err)
+	}
+	l.list = changes
+	for _, uc := range changes {
+		l.ordered[uc.UnitID] = uc
+	}
+	r.lc.lin = l
+	return l, nil
+}
+
+// OrderedChange is the change order's own change in its base, read once per
+// reading and shared with the kept-field derivation.
+func OrderedChange(ctx context.Context, c Client, r *Rollout) ([]UnitChange, error) {
+	l, err := r.lineage(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	return l.list, nil
+}
+
+// ChangeIn is the change in one space -- the ordered change for the base,
+// what the promotion wrote for any other -- with the ordered change's fields
+// the space did not take marked as kept.
+func ChangeIn(ctx context.Context, c Client, r *Rollout, spaceID string) ([]UnitChange, error) {
+	if spaceID == r.Order.SpaceID {
+		return OrderedChange(ctx, c, r)
+	}
+	l, err := r.lineage(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	names, err := l.spaceUnits(ctx, c, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	changes, err := Change(ctx, c, r.Order, spaceID, names)
+	if err != nil {
+		return nil, err
+	}
+	current, _ := currentData(ctx, c, spaceID)
+	for i := range changes {
+		u := &changes[i]
+		root, ok := l.rootChange(ctx, c, r, spaceID, u.UnitID)
+		if !ok {
+			continue
+		}
+		u.Kept = keptFields(root.Fields, u.Fields, current[u.UnitID], nil, func() map[string]map[string]bool {
+			return unitProtection(ctx, c, spaceID, u.UnitID)
+		})
+	}
+	return changes, nil
+}
+
+func (l *lineage) spaceUnits(ctx context.Context, c Client, spaceID string) (map[string]unitInfo, error) {
+	l.mu.Lock()
+	m, ok := l.units[spaceID]
+	l.mu.Unlock()
+	if ok {
+		return m, nil
+	}
+	rows, err := c.List(ctx, "/unit", url.Values{"where": {fmt.Sprintf("SpaceID = '%s'", spaceID)}, "select": {"UnitID,Slug,UpstreamUnitID"}})
+	if err != nil {
+		return nil, err
+	}
+	m = map[string]unitInfo{}
+	for _, row := range rows {
+		u := own(row, "Unit")
+		m[str(u["UnitID"])] = unitInfo{Slug: str(u["Slug"]), Upstream: str(u["UpstreamUnitID"])}
+	}
+	l.mu.Lock()
+	l.units[spaceID] = m
+	l.mu.Unlock()
+	return m, nil
+}
+
+// rootChange follows a unit up to the base and returns the ordered change
+// for the base unit it descends from, if the change touched it.
+func (l *lineage) rootChange(ctx context.Context, c Client, r *Rollout, spaceID, unitID string) (UnitChange, bool) {
+	for hop := 0; hop < 8 && spaceID != ""; hop++ {
+		if spaceID == r.Order.SpaceID {
+			uc, ok := l.ordered[unitID]
+			return uc, ok && uc.Touched
+		}
+		units, err := l.spaceUnits(ctx, c, spaceID)
+		if err != nil {
+			return UnitChange{}, false
+		}
+		info, ok := units[unitID]
+		if !ok || info.Upstream == "" {
+			return UnitChange{}, false
+		}
+		unitID = info.Upstream
+		spaceID = l.upstream[spaceID]
+	}
+	return UnitChange{}, false
+}
+
+// unitProtection reads a unit's current MutationSources for its protected paths.
+func unitProtection(ctx context.Context, c Client, spaceID, unitID string) map[string]map[string]bool {
+	body, err := c.GetRaw(ctx, "/space/"+spaceID+"/unit/"+unitID+"/mutation_sources")
+	if err != nil {
+		return nil
+	}
+	var resp struct {
+		MutationSources []any
+	}
+	if json.Unmarshal([]byte(body), &resp) != nil {
+		return nil
+	}
+	return protectedPaths(resp.MutationSources)
 }

@@ -1,12 +1,15 @@
-// Package rollout derives a rollout -- a ChangeOrder moving through the
-// ChangeWorkflow it was created under -- from what the server stores.
+// Package rollout reads a rollout -- a ChangeOrder moving through the
+// ChangeWorkflow it was created under -- the way the server now tells it.
 //
-// Nothing stores a stage. The server derives ResolvedSpaceIDs, ReleasedSpaceIDs
-// and State when a ChangeOrder is read; everything about stages, the next hop
-// and its gates is the client's reading, and this package reads it the way
-// `cub variant promote` and `cub changeorder get` do (public/cmd/cub/
-// variant_promote.go), down to the refusal messages, so that what commander
-// shows is what the CLI would say.
+// The server owns the reading: the ChangeOrder carries a copy of its
+// workflow, the Stage it has reached, and the promotions and releases that
+// got it there; stage membership is each stage's selector intersected with
+// the order's InScopeSpaceIDs; health is the LiveStatus of a space's latest
+// published Release; and the entry gates of the next stage come from a dry
+// run of POST /promote, which evaluates every (prerequisite, space) pair in
+// the CLI's words and refuses with them. This package asks for those and
+// arranges them for a screen; it derives nothing the server would derive
+// differently.
 package rollout
 
 import (
@@ -14,36 +17,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/confighub/cub-commander/internal/cubclient"
 )
 
 // Client is the slice of cubclient.Client this package needs; tests pass a
-// MemClient.
+// MemClient. Send is used for the promote and release requests.
 type Client interface {
 	List(ctx context.Context, path string, q url.Values) ([]cubclient.Row, error)
 	GetRaw(ctx context.Context, path string) (string, error)
+	Send(ctx context.Context, method, path string, q url.Values, contentType, body string) (int, []byte, error)
 }
 
+// The prerequisites the server evaluates, as a promote result names them.
 const (
-	annWorkflowUnit = "confighub.com/change-workflow-unit-id"
-	annWorkflowRev  = "confighub.com/change-workflow-revision-num"
-	annLiveStatus   = "confighub.com/live-status"
-	labelComponent  = "Component"
-
-	// The prerequisites a stage may declare, as the CLI knows them.
-	PrereqReleased = "released"
-	PrereqHealthy  = "healthy"
-	// PrereqTaken is the implicit gate every stage has: the previous stage
-	// must have taken the change. It is listed so a tally reads "1 of 2".
-	PrereqTaken = "taken"
+	PrereqPromoted  = "Promoted"
+	PrereqReleased  = "Released"
+	PrereqHealthy   = "Healthy"
+	PrereqValidated = "Validated"
+	// StageCompleted is what the server records as a ChangeOrder's Stage once
+	// the last stage satisfies the workflow's final prerequisites.
+	StageCompleted = "Completed"
 )
 
 // The console states, in the Web UI's words so the two surfaces agree.
@@ -62,41 +60,141 @@ const (
 // Order is a ChangeOrder row, read once.
 type Order struct {
 	ID, Slug, SpaceID, SpaceSlug string
-	Description, State           string
+	Description, State, Stage    string
+	UpdateType                   string
 	AbortedReason, CreatedAt     string
 	StartTagID, EndTagID         string
+	WorkflowID                   string
 	InScope, Resolved, Released  []string
-	Annotations                  map[string]string
 	Skipped                      map[string]string
+	// Workflow is the copy the order carries, taken when the workflow was
+	// associated; nil when no workflow governs the order.
+	Workflow   *Workflow
+	Promotions []Promotion
+	Failures   []PromotionFailure
+	Overrides  []Override
+	Releases   []OrderRelease
+}
+
+// Workflow is a ChangeWorkflowSpec: the stages, the final gates, and the
+// names of the custom and attestation prerequisites a stage may cite.
+type Workflow struct {
+	Stages []Stage
+	Final  []string
+	Custom map[string]string // name → description
+	Attest map[string]string // name → description
+}
+
+type Stage struct {
+	Name                 string
+	WhereSpace           string
+	Prerequisites        []string
+	ReleasePrerequisites []string
+}
+
+// Promotion is one recorded write of the change into spaces.
+type Promotion struct {
+	At, Stage, UserID string
+	SpaceIDs          []string
+}
+
+// PromotionFailure is one recorded promotion that did not complete.
+type PromotionFailure struct {
+	At, Stage, UserID string
+	Spaces            []FailedSpace
+}
+
+type FailedSpace struct {
+	ID, Slug, Action, Reason string
+	Units                    []string // "slug: error"
+}
+
+// Override is one recorded forced promotion.
+type Override struct {
+	At, Stage, UserID, Reason string
+	SpaceIDs, FailedGates     []string
+}
+
+// OrderRelease is the earliest published Release of a space that carries the change.
+type OrderRelease struct {
+	SpaceID, ReleaseID string
+	ReleaseNum         int
 }
 
 // ParseOrder reads an extended ChangeOrder row (entity-keyed, as the list
 // API returns it and cubclient keeps it).
 func ParseOrder(row cubclient.Row) Order {
-	co, _ := row["ChangeOrder"].(map[string]any)
-	if co == nil {
-		co = row
-	}
+	co := own(row, "ChangeOrder")
 	o := Order{
 		ID:            str(co["ChangeOrderID"]),
 		Slug:          str(co["Slug"]),
 		SpaceID:       str(co["SpaceID"]),
+		SpaceSlug:     str(co["SpaceSlug"]),
 		Description:   str(co["Description"]),
 		State:         str(co["State"]),
+		Stage:         str(co["Stage"]),
+		UpdateType:    str(co["UpdateType"]),
 		AbortedReason: str(co["AbortedReason"]),
 		CreatedAt:     str(co["CreatedAt"]),
 		StartTagID:    str(co["StartTagID"]),
 		EndTagID:      str(co["EndTagID"]),
+		WorkflowID:    str(co["ChangeWorkflowID"]),
 		InScope:       strs(co["InScopeSpaceIDs"]),
 		Resolved:      strs(co["ResolvedSpaceIDs"]),
 		Released:      strs(co["ReleasedSpaceIDs"]),
-		Annotations:   strmap(co["Annotations"]),
 		Skipped:       strmap(co["SkippedUnits"]),
+		Workflow:      parseWorkflow(co["ChangeWorkflow"]),
 	}
-	if sp, ok := row["Space"].(map[string]any); ok {
+	if sp, ok := row["Space"].(map[string]any); ok && str(sp["Slug"]) != "" {
 		o.SpaceSlug = str(sp["Slug"])
 	}
+	for _, p := range list(co["Promotions"]) {
+		o.Promotions = append(o.Promotions, Promotion{At: str(p["PromotedAt"]), Stage: str(p["Stage"]), UserID: str(p["UserID"]), SpaceIDs: strs(p["SpaceIDs"])})
+	}
+	for _, f := range list(co["PromotionFailures"]) {
+		pf := PromotionFailure{At: str(f["FailedAt"]), Stage: str(f["Stage"]), UserID: str(f["UserID"])}
+		for _, s := range list(f["Spaces"]) {
+			fs := FailedSpace{ID: str(s["SpaceID"]), Slug: str(s["SpaceSlug"]), Action: str(s["Action"]), Reason: firstNonEmpty(str(s["Reason"]), str(s["Error"]))}
+			for _, u := range list(s["Units"]) {
+				fs.Units = append(fs.Units, str(u["Slug"])+": "+str(u["Error"]))
+			}
+			pf.Spaces = append(pf.Spaces, fs)
+		}
+		o.Failures = append(o.Failures, pf)
+	}
+	for _, v := range list(co["PromotionOverrides"]) {
+		o.Overrides = append(o.Overrides, Override{At: str(v["OverriddenAt"]), Stage: str(v["Stage"]), UserID: str(v["UserID"]), Reason: str(v["Reason"]), SpaceIDs: strs(v["SpaceIDs"]), FailedGates: strs(v["FailedGates"])})
+	}
+	for _, r := range list(co["Releases"]) {
+		o.Releases = append(o.Releases, OrderRelease{SpaceID: str(r["SpaceID"]), ReleaseID: str(r["ReleaseID"]), ReleaseNum: num(r["ReleaseNum"])})
+	}
 	return o
+}
+
+// parseWorkflow reads the ChangeWorkflowSpec copy on an order; nil when the
+// order carries none.
+func parseWorkflow(v any) *Workflow {
+	m, _ := v.(map[string]any)
+	if m == nil {
+		return nil
+	}
+	wf := &Workflow{Custom: map[string]string{}, Attest: map[string]string{}}
+	for _, s := range list(m["Stages"]) {
+		wf.Stages = append(wf.Stages, Stage{Name: str(s["Name"]), WhereSpace: str(s["WhereSpace"]), Prerequisites: strs(s["Prerequisites"]), ReleasePrerequisites: strs(s["ReleasePrerequisites"])})
+	}
+	if f, ok := m["Final"].(map[string]any); ok {
+		wf.Final = strs(f["Prerequisites"])
+	}
+	for _, p := range list(m["CustomPrerequisites"]) {
+		wf.Custom[str(p["Name"])] = str(p["Description"])
+	}
+	for _, p := range list(m["AttestationPrerequisites"]) {
+		wf.Attest[str(p["Name"])] = str(p["Description"])
+	}
+	if len(wf.Stages) == 0 {
+		return nil
+	}
+	return wf
 }
 
 // Ref is the "space/slug" form the CLI takes for --change-order.
@@ -107,33 +205,27 @@ func (o Order) Ref() string {
 	return o.Slug
 }
 
-// Workflow is the parsed ChangeWorkflow definition (SDK core/changeworkflow).
-type Workflow struct {
-	Name   string
-	Stages []Stage
-	Final  []string // final.prerequisites
-}
-
-type Stage struct {
-	Name          string
-	WhereSpace    string
-	Prerequisites []string
-}
-
-// Health is a space's live-status annotation as argobot writes it.
+// Health is the LiveStatus of a space's latest published Release, as the
+// reporter (argobot) wrote it there.
 type Health struct {
 	Present    bool
-	Sync       string `json:"syncStatus"`
-	Phase      string `json:"operationPhase"`
-	Status     string `json:"healthStatus"`
-	ObservedAt string `json:"observedAt"`
-	Message    string `json:"message"`
-	Source     string `json:"source"`
+	Sync       string // Synced, OutOfSync, Unknown
+	Status     string // Healthy, Progressing, Degraded, Suspended, Missing, Unknown
+	Operation  string // Running, Succeeded, Failed, or ""
+	ObservedAt string
+	Message    string
+	Reporter   string
+	ReleaseNum int
+	ReleaseID  string
+	// ForOrder says the latest published Release was published for this
+	// change order, so the status describes the change and not what ran before.
+	ForOrder bool
 }
 
-// OK is the CLI's reading: Synced, Succeeded, Healthy.
+// OK is the server's Healthy gate reading: Synced and Healthy with no
+// operation running or failed.
 func (h Health) OK() bool {
-	return h.Present && h.Sync == "Synced" && h.Phase == "Succeeded" && h.Status == "Healthy"
+	return h.Present && h.Sync == "Synced" && h.Status == "Healthy" && h.Operation != "Running" && h.Operation != "Failed"
 }
 
 // Space is one member of a stage with its three bits.
@@ -141,7 +233,7 @@ type Space struct {
 	ID, Slug, Variant string
 	Labels            map[string]string
 	Releasable        bool   // has a ReleaseTargetID
-	Upstream          string // the UpstreamSpaceID annotation cub variant create stamps
+	Upstream          string // UpstreamSpaceID: the space it was cloned from
 	Taken, Released   bool
 	Health            Health
 }
@@ -154,10 +246,9 @@ type StageState struct {
 }
 
 // HealthyForChange is whether the space runs this change healthily: it has
-// released the change and its live status is good. Live status alone says
-// the space is healthy on whatever it runs, which before the release is the
-// previous state, so the strip does not count it. (Neither this nor the UI
-// checks that the observation is of the released manifest; see F2.)
+// released the change and the live status of its latest release is good.
+// Live status alone says the space is healthy on whatever it runs, which
+// before the release is the previous state, so the strip does not count it.
 func (sp Space) HealthyForChange() bool { return sp.Released && sp.Health.OK() }
 
 func (s StageState) Counts() (taken, released, healthy int) {
@@ -175,10 +266,11 @@ func (s StageState) Counts() (taken, released, healthy int) {
 	return
 }
 
-// Gate is one prerequisite of the next stage, evaluated over the previous
-// stage's members, with the CLI's refusal text when it fails.
+// Gate is one (prerequisite, space) pair of the next stage's entry gates,
+// as the server evaluated it, with its refusal text when it fails.
 type Gate struct {
-	Name   string
+	Name   string // Promoted, Released, Healthy, Validated, or a custom prerequisite's name
+	Space  string // the slug of the previous-stage space it was evaluated over
 	OK     bool
 	Reason string
 }
@@ -197,24 +289,27 @@ func Open(gates []Gate) bool {
 	return ok == total
 }
 
-// Rollout is the derived reading of one ChangeOrder.
+// Rollout is the reading of one ChangeOrder.
 type Rollout struct {
 	Order       Order
 	Workflow    *Workflow
-	WorkflowRef string // "unit-slug @rev N"
+	WorkflowRef string // the workflow's slug (the order carries a copy of it)
 	Component   string
 	// Stages[0] is the source (the base space); the rest are the workflow's.
 	Stages []StageState
-	// Next indexes Stages: the first stage not every member has taken; -1
-	// when every stage has it. Gates are Next's entry gates, or final's when
-	// Next is -1.
+	// Next indexes Stages: the stage the server would promote into next; -1
+	// when every stage has the change. Gates are its entry gates as the dry
+	// run evaluated them, or the final reading when Next is -1.
 	Next      int
 	Gates     []Gate
 	Completed bool
 	State     string
 	Blocker   string
-	// Err is set when the workflow could not be read; Stages then holds only
-	// the source and State says so.
+	// Plan is the gate dry run's result when the server answered one; nil
+	// when it could not be asked (no workflow, aborted) or refused outright.
+	Plan *PlanResult
+	// Err is set when part of the reading could not be made; what could be
+	// is still shown and State says so.
 	Err string
 
 	// lc is shared by copies of the reading (AfterPromote); built lazily by
@@ -227,73 +322,68 @@ type lineageCache struct {
 	lin *lineage
 }
 
-// Reached is the last workflow stage the change has reached, the CLI's
-// "Stage" column: "" while it has not finished the first one.
-func (r *Rollout) Reached() string {
-	if r.Workflow == nil || len(r.Stages) < 2 {
-		return ""
-	}
-	switch {
-	case r.Next < 0:
-		return r.Stages[len(r.Stages)-1].Name
-	case r.Next > 1:
-		return r.Stages[r.Next-1].Name
-	}
-	return ""
-}
+// Reached is the stage the server records the change as having reached:
+// "" while it has not finished the first one, Completed at the end.
+func (r *Rollout) Reached() string { return r.Order.Stage }
 
 // NextName is the stage the change would advance into, or "".
 func (r *Rollout) NextName() string {
-	if r.Next < 0 || r.Next >= len(r.Stages) {
+	if r.Next <= 0 || r.Next >= len(r.Stages) {
 		return ""
 	}
 	return r.Stages[r.Next].Name
 }
 
 // Cache remembers what is the same across the rollouts of one run: the
-// spaces a stage clause selects (their live status must be re-read on the
-// next run, so a Cache lives for one statement) and the workflow errors.
-// Parsed workflow revisions are immutable and cached for the process.
+// spaces a stage clause selects, the releases read for health, and the gate
+// dry runs. Live status must be re-read on the next run, so a Cache lives
+// for one statement. Workflow slugs never change and are cached for the process.
 type Cache struct {
 	mu     sync.Mutex
 	spaces map[string][]cubclient.Row
-	wfErr  map[string]error
+	plans  map[string]*planAnswer
+}
+
+type planAnswer struct {
+	plan *PlanResult
+	err  error
 }
 
 func NewCache() *Cache {
-	return &Cache{spaces: map[string][]cubclient.Row{}, wfErr: map[string]error{}}
+	return &Cache{spaces: map[string][]cubclient.Row{}, plans: map[string]*planAnswer{}}
 }
 
-// workflows is the process-wide cache of parsed workflow revisions, keyed
-// unit@rev. A revision never changes, so this never goes stale.
-var workflows sync.Map
+// workflowSlugs is the process-wide cache of ChangeWorkflowID → slug.
+var workflowSlugs sync.Map
 
-// Load derives the rollout for one ChangeOrder row.
+const spaceSelect = "SpaceID,Slug,Labels,Annotations,ReleaseTargetID,UpstreamSpaceID,ComponentID,Component.Slug"
+
+// Load reads the rollout for one ChangeOrder row.
 func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*Rollout, error) {
 	if cache == nil {
 		cache = NewCache()
 	}
 	o := ParseOrder(row)
-	r := &Rollout{Order: o, Next: -1, lc: &lineageCache{}}
+	r := &Rollout{Order: o, Workflow: o.Workflow, Next: -1, lc: &lineageCache{}}
 
-	// The base space and the workflow both follow from the order alone;
-	// read them together.
-	unitID, hasWF := o.Annotations[annWorkflowUnit]
+	// The base space, the workflow's name and the gate dry run follow from
+	// the order alone; read them together.
 	var (
-		wf    *Workflow
-		wfRef string
-		wfErr error
-		wfWG  sync.WaitGroup
+		wfRef  string
+		plan   *PlanResult
+		planEr error
+		wg     sync.WaitGroup
 	)
-	if hasWF {
-		wfWG.Add(1)
-		go func() {
-			defer wfWG.Done()
-			wf, wfRef, wfErr = cache.workflow(ctx, c, unitID, o.Annotations[annWorkflowRev])
-		}()
+	if o.Workflow != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); wfRef = workflowSlug(ctx, c, o.WorkflowID) }()
+		if o.AbortedReason == "" {
+			wg.Add(1)
+			go func() { defer wg.Done(); plan, planEr = cache.gatePlan(ctx, c, o) }()
+		}
 	}
-	base, err := spaceByID(ctx, c, o.SpaceID)
-	wfWG.Wait()
+	base, component, err := spaceByID(ctx, c, o.SpaceID)
+	wg.Wait()
 	if err != nil {
 		return nil, err
 	}
@@ -304,48 +394,34 @@ func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*Roll
 	base.Taken = true // the change was authored here
 	base.Released = true
 	r.Stages = []StageState{{Stage: Stage{Name: "source"}, Source: true, Spaces: []Space{base}}}
+	r.Component = firstNonEmpty(component, base.Labels["Component"])
 
 	if o.AbortedReason != "" {
 		r.State, r.Blocker = StateAborted, "Aborted: "+o.AbortedReason
 	}
-
-	if !hasWF {
+	if o.Workflow == nil {
 		if r.State == "" {
 			r.State, r.Blocker = StateNoWorkflow, "No ChangeWorkflow governs this rollout, so it has no stages."
 		}
 		return r, nil
 	}
-	if wfErr != nil {
-		r.Err = wfErr.Error()
-		if r.State == "" {
-			r.State, r.Blocker = StateUnknown, "Could not read the ChangeWorkflow this rollout names: "+wfErr.Error()
-		}
-		return r, nil
-	}
-	r.Workflow, r.WorkflowRef = wf, wfRef
+	r.WorkflowRef = wfRef
 
-	r.Component = base.Labels[labelComponent]
-	if r.Component == "" {
-		r.Err = fmt.Sprintf("Space '%s' has no %s label, so there is no component for a ChangeWorkflow's stages to select within", base.Slug, labelComponent)
-		if r.State == "" {
-			r.State, r.Blocker = StateUnknown, r.Err
-		}
-		return r, nil
-	}
-
-	// The stage lookups are independent of each other: one round trip's
-	// worth of waiting rather than one per stage.
+	// Stage membership: each stage's selector intersected with the order's
+	// scope, as the server computes it. The lookups are independent.
+	wf := o.Workflow
 	stageRows := make([][]cubclient.Row, len(wf.Stages))
 	stageErrs := make([]error, len(wf.Stages))
-	var wg sync.WaitGroup
+	var swg sync.WaitGroup
 	for i, st := range wf.Stages {
-		wg.Add(1)
+		swg.Add(1)
 		go func(i int, st Stage) {
-			defer wg.Done()
-			stageRows[i], stageErrs[i] = cache.stageSpaces(ctx, c, st, r.Component)
+			defer swg.Done()
+			stageRows[i], stageErrs[i] = cache.stageSpaces(ctx, c, st, o.InScope)
 		}(i, st)
 	}
-	wg.Wait()
+	swg.Wait()
+	var releasable []string
 	for i, st := range wf.Stages {
 		rows, err := stageRows[i], stageErrs[i]
 		if err != nil {
@@ -357,26 +433,63 @@ func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*Roll
 		}
 		ss := StageState{Stage: st}
 		for _, row := range rows {
-			sp := parseSpace(row)
-			if len(o.InScope) > 0 && !contains(o.InScope, sp.ID) {
-				continue
-			}
+			sp, _ := parseSpace(row)
 			sp.Taken = contains(o.Resolved, sp.ID)
 			sp.Released = contains(o.Released, sp.ID)
+			if sp.Releasable {
+				releasable = append(releasable, sp.ID)
+			}
 			ss.Spaces = append(ss.Spaces, sp)
 		}
 		sort.Slice(ss.Spaces, func(i, j int) bool { return ss.Spaces[i].Slug < ss.Spaces[j].Slug })
 		r.Stages = append(r.Stages, ss)
 	}
-	derive(r)
+
+	// Health: the latest published release per space with a target.
+	health, err := latestReleases(ctx, c, releasable)
+	if err != nil {
+		r.Err = err.Error()
+	}
+	for si := range r.Stages {
+		for j := range r.Stages[si].Spaces {
+			sp := &r.Stages[si].Spaces[j]
+			if h, ok := health[sp.ID]; ok {
+				h.ForOrder = h.ReleaseID != "" && releaseOf(o, sp.ID) == h.ReleaseID || h.ForOrder
+				sp.Health = h
+			}
+		}
+	}
+
+	// The next stage and its gates, from the server's dry run.
+	r.Plan = plan
+	if planEr != nil {
+		r.Err = firstNonEmpty(r.Err, planEr.Error())
+	}
+	derive(r, planEr)
 	return r, nil
 }
 
-// derive is the pure part: next stage, gates, completion, console state.
-func derive(r *Rollout) {
-	stages := r.Stages[1:] // the workflow's
+// releaseOf is the release the order records for a space, "" when none.
+func releaseOf(o Order, spaceID string) string {
+	for _, rel := range o.Releases {
+		if rel.SpaceID == spaceID {
+			return rel.ReleaseID
+		}
+	}
+	return ""
+}
+
+// derive sets Next, Gates, Completed and the console state from the bits
+// and the dry run. The dry run answers for the next stage; the final reading,
+// which the server only records on a write, is taken from the bits so that a
+// release or a health report shows up before the next promotion asks.
+func derive(r *Rollout, planErr error) {
+	o := r.Order
+	wfStages := r.Stages[1:]
+	// Where the change would go next, by the bits: the first stage some
+	// member has not taken. The dry run's answer replaces it when it came.
 	r.Next = -1
-	for i, st := range stages {
+	for i, st := range wfStages {
 		reached := len(st.Spaces) > 0
 		for _, sp := range st.Spaces {
 			if !sp.Taken {
@@ -389,33 +502,35 @@ func derive(r *Rollout) {
 			break
 		}
 	}
-	if r.Next > 0 {
-		next := r.Stages[r.Next]
-		var prev *StageState
-		if r.Next > 1 {
-			prev = &r.Stages[r.Next-1]
+	r.Completed = o.Stage == StageCompleted
+	if p := r.Plan; p != nil {
+		switch {
+		case p.Complete:
+			r.Next = -1
+		case len(p.Stages) > 0:
+			for i, st := range wfStages {
+				if st.Name == p.Stages[0].Name {
+					r.Next = i + 1
+				}
+			}
+			r.Gates = p.Stages[0].Gates
 		}
-		r.Gates = gates(next.Name, next.Prerequisites, prev, r.Order, true)
 	}
-	// Completed: the last stage satisfies final.prerequisites.
-	if len(stages) > 0 {
-		last := &r.Stages[len(r.Stages)-1]
-		final := gates("final", r.Workflow.Final, last, r.Order, false)
-		r.Completed = len(last.Spaces) > 0 && Open(final)
-		if r.Next < 0 {
-			r.Gates = final
+	if r.Next < 0 && len(wfStages) > 0 {
+		// The final reading: the last stage's members against final.prerequisites.
+		r.Gates = finalGates(r.Workflow, &r.Stages[len(r.Stages)-1], o)
+		if !r.Completed && Open(r.Gates) {
+			r.Completed = true // every check this reading can make holds; the server records it on the next write
 		}
 	}
 	if r.State != "" { // aborted
 		return
 	}
-	var failing *Gate
-	for i := range r.Gates {
-		if !r.Gates[i].OK {
-			failing = &r.Gates[i]
-			break
-		}
+	if r.Plan == nil && planErr != nil && r.Next > 0 {
+		r.State, r.Blocker = StateUnknown, "The server did not answer the dry run that evaluates the gates: "+planErr.Error()
+		return
 	}
+	failing := firstFailing(r.Gates)
 	switch {
 	case failing == nil && r.Next < 0:
 		r.State, r.Blocker = StateComplete, NoBlocker
@@ -430,108 +545,112 @@ func derive(r *Rollout) {
 	}
 }
 
-// gates evaluates a stage's entry gates over the previous stage's members,
-// in the CLI's order and words (validateStageEntryGates,
-// checkVariantPrerequisites). The first stage has no previous stage and so
-// no gates: the change is promoting out of the base it was authored in. When
-// entry is true a missing previous stage yields the source's trivial gate so
-// the tally reads "1 of 1" the way the UI draws it.
-func gates(stage string, prereqs []string, prev *StageState, o Order, entry bool) []Gate {
-	if prev == nil {
-		if entry {
-			return []Gate{{Name: PrereqTaken, OK: true, Reason: "the base has the change"}}
+// firstFailing picks the gate to report as the blocker: the server lists
+// every (prerequisite, space) pair, and the CLI's order of checks -- promoted,
+// validated, released, healthy, then custom -- says which one matters first.
+func firstFailing(gates []Gate) *Gate {
+	rank := func(name string) int {
+		switch name {
+		case PrereqPromoted:
+			return 0
+		case PrereqValidated:
+			return 1
+		case PrereqReleased:
+			return 2
+		case PrereqHealthy:
+			return 3
 		}
-		return nil
+		return 4
 	}
-	out := []Gate{{Name: PrereqTaken, OK: true}}
-	for _, p := range prereqs {
-		out = append(out, Gate{Name: p, OK: true})
-	}
-	if len(prev.Spaces) == 0 {
-		out[0] = Gate{Name: PrereqTaken, Reason: fmt.Sprintf("unable to promote to stage '%s', its previous stage '%s' selects no Space", stage, prev.Name)}
-		return out
-	}
-	fail := func(name, reason string) {
-		for i := range out {
-			if out[i].Name == name && out[i].OK {
-				out[i].OK, out[i].Reason = false, reason
-			}
-		}
-	}
-	for _, sp := range prev.Spaces {
-		v := sp.Variant
-		if !sp.Taken {
-			fail(PrereqTaken, fmt.Sprintf("unable to promote to stage '%s', Variant '%s' has not taken change order '%s'", stage, v, o.Slug))
+	var best *Gate
+	for i := range gates {
+		g := &gates[i]
+		if g.OK {
 			continue
 		}
-		for _, p := range prereqs {
+		if best == nil || rank(g.Name) < rank(best.Name) {
+			best = g
+		}
+	}
+	return best
+}
+
+// finalGates is this reading of final.prerequisites over the last stage:
+// Promoted and Released from the order's sets, Healthy from the release
+// live status, in the CLI's words. A custom or attestation prerequisite
+// is not evaluated here and is reported as such, not as failing.
+func finalGates(wf *Workflow, last *StageState, o Order) []Gate {
+	var out []Gate
+	if len(last.Spaces) == 0 {
+		return []Gate{{Name: PrereqPromoted, Reason: fmt.Sprintf("the last stage '%s' selects no Space", last.Name)}}
+	}
+	for _, sp := range last.Spaces {
+		v := sp.Variant
+		g := Gate{Name: PrereqPromoted, Space: sp.Slug, OK: sp.Taken}
+		if !g.OK {
+			g.Reason = fmt.Sprintf("Variant '%s' has not taken change order '%s'", v, o.Slug)
+		}
+		out = append(out, g)
+		for _, p := range wf.Final {
+			g := Gate{Name: p, Space: sp.Slug, OK: true}
 			switch p {
+			case PrereqReleased:
+				if sp.Releasable && !sp.Released {
+					g.OK, g.Reason = false, fmt.Sprintf("Variant '%s' has taken change order '%s' but has not released it", v, o.Slug)
+				}
 			case PrereqHealthy:
 				if reason := unhealthy(sp); reason != "" {
-					fail(p, reason)
+					g.OK, g.Reason = false, reason
 				}
-			case PrereqReleased:
-				switch {
-				case !sp.Releasable:
-					fail(p, fmt.Sprintf("unable to promote to stage '%s', Variant '%s' cannot have any released changes, missing ReleaseTargetID", stage, v))
-				case !sp.Released:
-					fail(p, fmt.Sprintf("unable to promote to stage '%s', Variant '%s' has taken change order '%s' but has not released it", stage, v, o.Slug))
-				}
+			case PrereqPromoted:
+				continue
 			default:
-				fail(p, fmt.Sprintf("unrecognized prerequisite for Stage '%s': '%s'", stage, p))
+				g.Reason = fmt.Sprintf("%s: not evaluated here; the server evaluates it when the last stage is released", p)
 			}
+			out = append(out, g)
 		}
 	}
 	return out
 }
 
-// unhealthy is checkVariantIsHealthy's verdict as text, "" when healthy.
+// unhealthy is the Healthy gate's verdict for a space as text, "" when healthy.
 func unhealthy(sp Space) string {
 	v := sp.Variant
 	switch {
 	case !sp.Releasable:
 		return fmt.Sprintf("Variant '%s' has no ReleaseTargetID, so its health cannot be determined", v)
+	case !sp.Released:
+		return fmt.Sprintf("Variant '%s' has not released change order's revisions", v)
 	case !sp.Health.Present:
-		return fmt.Sprintf("live-status not found for Variant '%s'", v)
+		return fmt.Sprintf("no live status has been reported for Variant '%s'", v)
 	case sp.Health.Sync != "Synced":
 		return fmt.Sprintf("Variant '%s' is not synced", v)
-	case sp.Health.Phase != "Succeeded":
-		return fmt.Sprintf("Variant '%s' has not succeeded in deployment", v)
+	case sp.Health.Operation == "Running" || sp.Health.Operation == "Failed":
+		return fmt.Sprintf("Variant '%s' has an operation %s", v, strings.ToLower(sp.Health.Operation))
 	case sp.Health.Status != "Healthy":
 		return fmt.Sprintf("Variant '%s' is not healthy", v)
 	}
 	return ""
 }
 
-var componentPredicate = regexp.MustCompile(`(?i)\bLabels\.` + labelComponent + `\b`)
-
-// stageWhere is the CLI's stageWhereSpace: the stage's selector conjoined
-// with the component, refusing a selector that names the component itself.
-func stageWhere(st Stage, component string) (string, error) {
-	if componentPredicate.MatchString(st.WhereSpace) {
-		return "", fmt.Errorf("stage '%s' names Labels.%s in its whereSpace %q: the component is the change order's own and is appended to every stage's selector, so remove the predicate", st.Name, labelComponent, st.WhereSpace)
+// stageSpaces lists a stage's members: its selector ANDed with the order's
+// scope, so that the one where clause asks exactly what the server asks.
+func (c *Cache) stageSpaces(ctx context.Context, cl Client, st Stage, inScope []string) ([]cubclient.Row, error) {
+	if len(inScope) == 0 {
+		return nil, nil
 	}
-	cw := fmt.Sprintf("Labels.%s = '%s'", labelComponent, component)
-	if st.WhereSpace == "" {
-		return cw, nil
+	where := strings.TrimSpace(st.WhereSpace)
+	if where != "" {
+		where += " AND "
 	}
-	return st.WhereSpace + " AND " + cw, nil
-}
-
-const spaceSelect = "SpaceID,Slug,Labels,Annotations,ReleaseTargetID"
-
-func (c *Cache) stageSpaces(ctx context.Context, cl Client, st Stage, component string) ([]cubclient.Row, error) {
-	where, err := stageWhere(st, component)
-	if err != nil {
-		return nil, err
-	}
+	where += "SpaceID IN (" + quoted(inScope) + ")"
 	c.mu.Lock()
 	rows, ok := c.spaces[where]
 	c.mu.Unlock()
 	if ok {
 		return rows, nil
 	}
-	rows, err = cl.List(ctx, "/space", url.Values{"where": {where}, "select": {spaceSelect}})
+	rows, err := cl.List(ctx, "/space", url.Values{"where": {where}, "select": {spaceSelect}, "include": {"ComponentID"}})
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve the Spaces of Stage '%s': %w", st.Name, err)
 	}
@@ -541,140 +660,102 @@ func (c *Cache) stageSpaces(ctx context.Context, cl Client, st Stage, component 
 	return rows, nil
 }
 
-// workflow reads the pinned revision of the workflow unit and parses it.
-func (c *Cache) workflow(ctx context.Context, cl Client, unitID, rev string) (*Workflow, string, error) {
-	key := unitID + "@" + rev
-	if v, ok := workflows.Load(key); ok {
-		wf := v.(*Workflow)
-		return wf, wfRef(wf, rev), nil
+// latestReleases reads the latest published Release of each space, for its
+// LiveStatus, a batch of spaces per call.
+func latestReleases(ctx context.Context, c Client, spaceIDs []string) (map[string]Health, error) {
+	out := map[string]Health{}
+	const batch = 100
+	for start := 0; start < len(spaceIDs); start += batch {
+		end := min(start+batch, len(spaceIDs))
+		rows, err := c.List(ctx, "/release", url.Values{
+			"where":    {"Published = true AND SpaceID IN (" + quoted(spaceIDs[start:end]) + ")"},
+			"select":   {"SpaceID,ReleaseNum,ReleaseID,LiveStatus,ChangeOrderID"},
+			"order_by": {"DESC:ReleaseNum"},
+		})
+		if err != nil {
+			return out, fmt.Errorf("release live status: %w", err)
+		}
+		for _, row := range rows {
+			rel := own(row, "Release")
+			sid := str(rel["SpaceID"])
+			if cur, ok := out[sid]; ok && cur.ReleaseNum >= num(rel["ReleaseNum"]) {
+				continue
+			}
+			h := Health{ReleaseNum: num(rel["ReleaseNum"]), ReleaseID: str(rel["ReleaseID"])}
+			if ls, ok := rel["LiveStatus"].(map[string]any); ok && ls != nil {
+				h.Present = str(ls["Sync"]) != "" || str(ls["Health"]) != ""
+				h.Sync, h.Status, h.Operation = str(ls["Sync"]), str(ls["Health"]), str(ls["Operation"])
+				h.ObservedAt, h.Message, h.Reporter = str(ls["ObservedAt"]), str(ls["Message"]), str(ls["Reporter"])
+			}
+			out[sid] = h
+		}
 	}
-	c.mu.Lock()
-	err, failed := c.wfErr[key]
-	c.mu.Unlock()
-	if failed {
-		return nil, "", err
-	}
-	wf, err := loadWorkflow(ctx, cl, unitID, rev)
-	if err != nil {
-		c.mu.Lock()
-		c.wfErr[key] = err
-		c.mu.Unlock()
-		return nil, "", err
-	}
-	workflows.Store(key, wf)
-	return wf, wfRef(wf, rev), nil
+	return out, nil
 }
 
-func wfRef(wf *Workflow, rev string) string { return wf.Name + " @rev " + rev }
-
-func loadWorkflow(ctx context.Context, cl Client, unitID, rev string) (*Workflow, error) {
-	units, err := cl.List(ctx, "/unit", url.Values{"where": {fmt.Sprintf("UnitID = '%s'", unitID)}, "select": {"UnitID,SpaceID,Slug"}})
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch ChangeWorkflow unit %s: %w", unitID, err)
+// workflowSlug names a ChangeWorkflow by ID, "" when it cannot be read.
+func workflowSlug(ctx context.Context, c Client, id string) string {
+	if id == "" {
+		return ""
 	}
-	if len(units) == 0 {
-		return nil, fmt.Errorf("ChangeWorkflow unit %s not found", unitID)
+	if v, ok := workflowSlugs.Load(id); ok {
+		return v.(string)
 	}
-	u, _ := units[0]["Unit"].(map[string]any)
-	if u == nil {
-		u = units[0]
+	rows, err := c.List(ctx, "/change_workflow", url.Values{"where": {fmt.Sprintf("ChangeWorkflowID = '%s'", id)}, "select": {"Slug"}})
+	if err != nil || len(rows) == 0 {
+		return ""
 	}
-	spaceID, slug := str(u["SpaceID"]), str(u["Slug"])
-	base := "/space/" + spaceID + "/unit/" + unitID
-	revs, err := cl.List(ctx, base+"/revision", url.Values{"where": {"RevisionNum = " + rev}, "select": {"RevisionID,RevisionNum"}})
-	if err != nil || len(revs) == 0 {
-		return nil, fmt.Errorf("failed to fetch revision %s of ChangeWorkflow unit %s", rev, slug)
+	slug := str(own(rows[0], "ChangeWorkflow")["Slug"])
+	if slug != "" {
+		workflowSlugs.Store(id, slug)
 	}
-	rv, _ := revs[0]["Revision"].(map[string]any)
-	if rv == nil {
-		rv = revs[0]
-	}
-	data, err := cl.GetRaw(ctx, base+"/revision/"+str(rv["RevisionID"])+"/data")
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch data of revision %s of unit %s: %w", rev, slug, err)
-	}
-	wf, err := ParseWorkflow(data)
-	if err != nil {
-		return nil, fmt.Errorf("unit %s revision %s does not carry a ChangeWorkflow definition: %w", slug, rev, err)
-	}
-	if wf.Name == "" {
-		wf.Name = slug
-	}
-	return wf, nil
+	return slug
 }
 
-// ParseWorkflow parses a ChangeWorkflow document.
-func ParseWorkflow(doc string) (*Workflow, error) {
-	var raw struct {
-		Kind     string `yaml:"kind"`
-		Metadata struct {
-			Name string `yaml:"name"`
-		} `yaml:"metadata"`
-		Spec struct {
-			Stages []struct {
-				Name          string   `yaml:"name"`
-				WhereSpace    string   `yaml:"whereSpace"`
-				Prerequisites []string `yaml:"prerequisites"`
-			} `yaml:"stages"`
-			Final struct {
-				Prerequisites []string `yaml:"prerequisites"`
-			} `yaml:"final"`
-		} `yaml:"spec"`
-	}
-	if err := yaml.Unmarshal([]byte(doc), &raw); err != nil {
-		return nil, err
-	}
-	if raw.Kind != "" && raw.Kind != "ChangeWorkflow" {
-		return nil, fmt.Errorf("kind is %s, not ChangeWorkflow", raw.Kind)
-	}
-	wf := &Workflow{Name: raw.Metadata.Name, Final: raw.Spec.Final.Prerequisites}
-	for _, s := range raw.Spec.Stages {
-		wf.Stages = append(wf.Stages, Stage{Name: s.Name, WhereSpace: s.WhereSpace, Prerequisites: s.Prerequisites})
-	}
-	if len(wf.Stages) == 0 {
-		return nil, fmt.Errorf("no stages")
-	}
-	return wf, nil
-}
-
-func spaceByID(ctx context.Context, cl Client, id string) (Space, error) {
-	rows, err := cl.List(ctx, "/space", url.Values{"where": {fmt.Sprintf("SpaceID = '%s'", id)}, "select": {spaceSelect}})
+func spaceByID(ctx context.Context, cl Client, id string) (Space, string, error) {
+	rows, err := cl.List(ctx, "/space", url.Values{"where": {fmt.Sprintf("SpaceID = '%s'", id)}, "select": {spaceSelect}, "include": {"ComponentID"}})
 	if err != nil {
-		return Space{}, fmt.Errorf("failed to fetch Space %s: %w", id, err)
+		return Space{}, "", fmt.Errorf("failed to fetch Space %s: %w", id, err)
 	}
 	if len(rows) == 0 {
-		return Space{}, fmt.Errorf("Space %s not found", id)
+		return Space{}, "", fmt.Errorf("Space %s not found", id)
 	}
-	return parseSpace(rows[0]), nil
+	sp, comp := parseSpace(rows[0])
+	return sp, comp, nil
 }
 
-func parseSpace(row cubclient.Row) Space {
-	sp, _ := row["Space"].(map[string]any)
-	if sp == nil {
-		sp = row
-	}
+// parseSpace reads a space row and the slug of the Component it names.
+func parseSpace(row cubclient.Row) (Space, string) {
+	sp := own(row, "Space")
 	s := Space{ID: str(sp["SpaceID"]), Slug: str(sp["Slug"]), Labels: strmap(sp["Labels"])}
 	s.Releasable = str(sp["ReleaseTargetID"]) != ""
 	s.Variant = s.Labels["Variant"]
 	if s.Variant == "" {
 		s.Variant = s.Slug
 	}
-	s.Upstream = strmap(sp["Annotations"])["UpstreamSpaceID"]
-	if ls := strmap(sp["Annotations"])[annLiveStatus]; ls != "" {
-		if json.Unmarshal([]byte(ls), &s.Health) == nil {
-			s.Health.Present = true
-		}
+	s.Upstream = firstNonEmpty(str(sp["UpstreamSpaceID"]), strmap(sp["Annotations"])["UpstreamSpaceID"])
+	comp := ""
+	if c, ok := row["Component"].(map[string]any); ok {
+		comp = str(c["Slug"])
 	}
-	return s
+	return s, comp
 }
 
-// CubCommands are the CLI lines behind the reading and the actions on it.
+// CubCommands are the CLI lines behind the reading.
 func (r *Rollout) CubCommands() []string {
 	out := []string{fmt.Sprintf("cub changeorder get %s --space %s", r.Order.Slug, r.Order.SpaceSlug)}
 	if r.Workflow != nil && r.Next > 0 {
 		out = append(out, fmt.Sprintf("cub variant promote --change-order %s --target-stage %s --dry-run -o mutations", r.Order.Ref(), r.NextName()))
 	}
 	return out
+}
+
+// own returns the entity map of an entity-keyed row, or the row itself.
+func own(row cubclient.Row, entity string) map[string]any {
+	if m, ok := row[entity].(map[string]any); ok {
+		return m
+	}
+	return row
 }
 
 func str(v any) string {
@@ -689,11 +770,35 @@ func str(v any) string {
 	return fmt.Sprint(v)
 }
 
+func num(v any) int {
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case int:
+		return x
+	case json.Number:
+		n, _ := x.Int64()
+		return int(n)
+	}
+	return 0
+}
+
 func strs(v any) []string {
 	items, _ := v.([]any)
 	out := make([]string, 0, len(items))
 	for _, it := range items {
 		out = append(out, str(it))
+	}
+	return out
+}
+
+func list(v any) []map[string]any {
+	items, _ := v.([]any)
+	out := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		if m, ok := it.(map[string]any); ok {
+			out = append(out, m)
+		}
 	}
 	return out
 }
@@ -707,17 +812,34 @@ func strmap(v any) map[string]string {
 	return out
 }
 
+func quoted(ids []string) string {
+	q := make([]string, len(ids))
+	for i, id := range ids {
+		q[i] = "'" + id + "'"
+	}
+	return strings.Join(q, ", ")
+}
+
 func contains(list []string, s string) bool { return slices.Contains(list, s) }
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 // Text renders the reading as plain text, for `-e` and for logs.
 func (r *Rollout) Text() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  %s\n", r.Order.Slug, r.Order.Description)
-	fmt.Fprintf(&b, "state %s · %s · blocker: %s\n", r.Order.State, r.State, r.Blocker)
+	fmt.Fprintf(&b, "state %s · stage %s · %s · blocker: %s\n", r.Order.State, firstNonEmpty(r.Order.Stage, "-"), r.State, r.Blocker)
 	if r.Workflow == nil {
 		return b.String()
 	}
-	fmt.Fprintf(&b, "workflow %s · component %s · completed %v\n\n", r.WorkflowRef, r.Component, r.Completed)
+	fmt.Fprintf(&b, "workflow %s · component %s · completed %v\n\n", firstNonEmpty(r.WorkflowRef, r.Order.WorkflowID), r.Component, r.Completed)
 	fmt.Fprintf(&b, "%-10s %-7s %-9s %-8s %s\n", "STAGE", "TAKEN", "RELEASED", "HEALTHY", "SPACES")
 	for i, st := range r.Stages {
 		mark := " "
@@ -755,16 +877,30 @@ func (r *Rollout) Text() string {
 		fmt.Fprintf(&b, "\nevery stage has taken it · final %d of %d satisfied\n", ok, total)
 	}
 	for _, g := range r.Gates {
-		glyph := "✓"
-		if !g.OK {
-			glyph = "✗"
+		fmt.Fprintf(&b, "  %s\n", g.Line())
+	}
+	if n := len(r.Order.Failures); n > 0 {
+		f := r.Order.Failures[n-1]
+		fmt.Fprintf(&b, "\nlast promotion failure: %s, stage %s (%d recorded)\n", f.At, f.Stage, n)
+		for _, s := range f.Spaces {
+			fmt.Fprintf(&b, "  %s %s: %s\n", s.Slug, s.Action, s.Reason)
 		}
-		reason := g.Reason
-		if reason == "" {
-			reason = g.Name
-		}
-		fmt.Fprintf(&b, "  %s %s\n", glyph, reason)
 	}
 	b.WriteString("\n" + strings.Join(r.CubCommands(), "\n") + "\n")
 	return b.String()
+}
+
+// Line renders a gate as ✓/✗ with the server's reason, or the pair when it holds.
+func (g Gate) Line() string {
+	if g.OK {
+		s := "✓ " + g.Name
+		if g.Space != "" {
+			s += " · " + g.Space
+		}
+		if g.Reason != "" {
+			s += " · " + g.Reason
+		}
+		return s
+	}
+	return "✗ " + firstNonEmpty(g.Reason, g.Name+" does not hold for "+g.Space)
 }

@@ -366,7 +366,7 @@ func (m Model) keyBar() string {
 			updown = "scroll diff"
 		}
 		keys = []struct{ k, label string }{
-			{"←→", "stage"}, {"↑↓", updown}, {"Tab", "pane"}, {"P/L/B", "promote/release/both"}, {"⏎", "full diff"}, {"w", "raw"}, {"s", "units"}, {"i", "order"},
+			{"←→", "stage"}, {"↑↓", updown}, {"Tab", "pane"}, {"P/L/B", "promote/release/both"}, {"⏎", "full diff"}, {"s", "units"}, {"i", "order"},
 			{"R", "refresh"}, {"^X", "cub"}, {"Esc", "list"}, {"^/", "help"}, {"^Q", "quit"},
 		}
 	}
@@ -441,7 +441,7 @@ of the promotion instead: the fields each unit would change, against its current
 ↑↓ space (Tab, then ↑↓ scrolls the diff). P promotes the next stage, L publishes a release of
 each space in the stage that has taken the change (pinned to the change order's end tag, after
 the triggers gate clears), B does both; each shows what it will run, in cub terms, and waits for
-y. ⏎ full diff, w raw text, s the space's units, i the change order's fields, R refresh, ^X the
+y. ⏎ full diff, s the space's units, i the change order's fields, R refresh, ^X the
 cub commands, Esc back to the list.
 
 Keys on a results row

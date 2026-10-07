@@ -14,11 +14,10 @@ import (
 	"github.com/confighub/cub-commander/internal/history"
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
-	"github.com/confighub/cub-commander/internal/scout"
 )
 
 // Run opens the application against the ConfigHub server cub pointed us at.
-func Run(sess plan.Session, evidence scout.Config) error {
+func Run(sess plan.Session) error {
 	client, err := cubclient.New()
 	if err != nil {
 		return err
@@ -29,13 +28,6 @@ func Run(sess plan.Session, evidence scout.Config) error {
 	}
 	live := catalog.NewLive()
 	m := New(sess, DefaultRunner(client, live), func(ctx context.Context, l *catalog.Live) error { return l.Sample(ctx, client) }, hist)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	m.evidenceContext = ctx
-	m.scoutConfig = evidence
-	provider := scout.NewProcessSession(evidence)
-	defer provider.Close()
-	m.evidenceLoader = provider.Load
 	m.fetcher = client.List
 	m.dataFetcher = func(ctx context.Context, row cubclient.Row) (string, error) { return exec.UnitData(ctx, client, row) }
 	m.dataLoader = func(ctx context.Context, row cubclient.Row) (string, string, error) {

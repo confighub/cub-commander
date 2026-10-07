@@ -5,7 +5,6 @@ of truth; update it when state changes. Design: `design.md`.
 
 | # | Milestone | Demo | Status |
 |---|---|---|---|
-| Evidence | Selected-resource read-only observation | Explicit `--scout-binding TARGET_ID=KUBE_CONTEXT`, Resource detail `3 Evidence`, captured snapshot and `r` refresh. | implemented, unreleased; bounded observation only, not live-vs-desired diff or replacement of the standalone explorer. Tracking: [observer #519](https://github.com/confighub/cub-scout/issues/519). |
 | API 0.8 | Catalog and change orders on SDK core v0.8.7 | `Component`, `ChangeWorkflow`, `Attestation`, `Group`, `ReviewComment` as entities; `Space.Component.Slug` join and a Component-entity preset; change orders read stages, gates and the plan from `POST /promote`, the change from `unit_diff`, health from `Release.LiveStatus`. | done 2026-10-06 on branch `sdk-0.8.7`, unreleased; see `change-orders.md` §1 |
 | M0 | Design and roadmap docs in repo | this file | done 2026-09-02 |
 | M1 | Engine: parser, compiler, executor | hidden `cub commander -e "SELECT Slug, Space.Slug FROM Unit IN * WHERE Labels.Environment = 'prod'"` prints a table; `EXPLAIN` prints the cub command. Golden tests statement → cub command. Needed under everything; not a user surface. | done 2026-09-02 (SELECT/HAVING/GROUP BY/ORDER/LIMIT, EXPLAIN, USE, SHOW ENTITIES/JOINS; all 20 list entities) |

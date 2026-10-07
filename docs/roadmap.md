@@ -5,7 +5,7 @@ of truth; update it when state changes. Design: `design.md`.
 
 | # | Milestone | Demo | Status |
 |---|---|---|---|
-| API 0.8 | Catalog and change orders on SDK core v0.8.7 | `Component`, `ChangeWorkflow`, `Attestation`, `Group`, `ReviewComment` as entities; `Space.Component.Slug` join and a Component-entity preset; change orders read stages, gates and the plan from `POST /promote`, the change from `unit_diff`, health from `Release.LiveStatus`. | done 2026-10-06 on branch `sdk-0.8.7`, unreleased; see `change-orders.md` §1 |
+| API 0.8 | Catalog and change orders on SDK core v0.8.7 | `Component`, `ChangeWorkflow`, `Attestation`, `Group`, `ReviewComment` as entities; `Space.Component.Slug` join and a Component-entity preset; change orders read stages, gates and the plan from `POST /promote`, the change from `unit_diff`, health from `Release.LiveStatus`. | released as v0.4.0 (2026-10-07); see `change-orders.md` §1 |
 | M0 | Design and roadmap docs in repo | this file | done 2026-09-02 |
 | M1 | Engine: parser, compiler, executor | hidden `cub commander -e "SELECT Slug, Space.Slug FROM Unit IN * WHERE Labels.Environment = 'prod'"` prints a table; `EXPLAIN` prints the cub command. Golden tests statement → cub command. Needed under everything; not a user surface. | done 2026-09-02 (SELECT/HAVING/GROUP BY/ORDER/LIMIT, EXPLAIN, USE, SHOW ENTITIES/JOINS; all 20 list entities) |
 | M2 | TUI walking skeleton | `cub commander` opens the screen: command area (multi-line, Enter/Shift+Enter/Ctrl+Enter), results grid with sort, detail pane, chips row, history drawer with Ctrl+R, Ctrl+X shows the cub command. | done 2026-09-02 (Bubble Tea v2 on charm.land paths; also chips add/remove, order-by toggle, row pivots s/t/u/d/r/l, detail view, help overlay) |

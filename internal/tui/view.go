@@ -125,7 +125,7 @@ func (m Model) topBar() string {
 	if scope == "" || scope == "*" {
 		scope = "*"
 	}
-	modeName := map[mode]string{modeResults: "Results", modeDetail: "Detail", modeText: m.textTitle, modeBrowse: "Browse", modeDiff: "Diff", modeRollout: "Rollout"}[m.mode]
+	modeName := map[mode]string{modeResults: "Results", modeDetail: "Detail", modeText: m.textTitle, modeBrowse: "Browse", modeDiff: "Diff", modeChangeOrder: "Change order"}[m.mode]
 	if m.chooserOpen {
 		modeName = "Browse by"
 	}
@@ -206,8 +206,8 @@ func (m Model) mainView() string {
 		return m.browseView()
 	case modeDiff:
 		return m.diffView()
-	case modeRollout:
-		return m.rolloutView()
+	case modeChangeOrder:
+		return m.changeOrderView()
 	case modeResults:
 		if m.result == nil {
 			body = dimStyle.Render("no results yet")
@@ -360,9 +360,9 @@ func (m Model) keyBar() string {
 		{"^B", "browse"}, {"^G", "grid"}, {"^O", "open row"}, {"^R", "history"}, {"^X", "explain"}, {"^/", "help"}, {"^Q", "quit"},
 		{"⇧Tab", "focus"}, {"f", "filter"}, {"o", "order"}, {"s/t/u/d/r/l", "pivot"},
 	}
-	if m.mode == modeRollout && !m.chooserOpen {
+	if m.mode == modeChangeOrder && !m.chooserOpen {
 		updown := "space"
-		if m.roll != nil && m.roll.pane == 1 {
+		if m.order != nil && m.order.pane == 1 {
 			updown = "scroll diff"
 		}
 		keys = []struct{ k, label string }{
@@ -431,9 +431,9 @@ data, m marks one and ⏎ on another diffs the two; Esc returns to the list, Esc
 it. The pivot keys
 work here too: u on a space lists its units, s on a unit shows its space's units, r revisions.
 
-Rollouts: the chooser's "Rollouts in flight" lists the change orders still moving, with state(),
+Change orders: the chooser's "Change orders in flight" lists the change orders still moving, with state(),
 stage(), next() and blocker() derived from each one's ChangeWorkflow the way cub changeorder list
-derives them. Enter on a ChangeOrder row opens it as a rollout (ChangeOrder | … | rollout): the
+derives them. Enter on a ChangeOrder row opens it as a change order (ChangeOrder | … | changeorder): the
 stage strip with taken/released/healthy per stage, the selected stage's spaces, the gates on the
 next hop in the CLI's words, and the change itself on the right, per unit, between the revisions
 the order's start and end tags mark. A stage that has not taken it shows the server's dry run

@@ -12,24 +12,24 @@ type Stmt interface{ stmt() }
 // pushable filters to the server and evaluates the rest locally; a SQL WHERE
 // must be pushable, a HAVING is forced local.
 type SelectStmt struct {
-	Columns    []Column // empty with Star=true means the entity's default columns
-	Star       bool
-	From       Source
-	Scope      *Scope   // nil: session scope
-	Filters    []Filter // in step order
-	ColumnsPos int      // Filters[:ColumnsPos] come before the columns step when printed
-	GroupBy    []Ref
-	OrderBy    []OrderItem
-	Limit      *int
-	Browse     []Ref        // browse by axes; the TUI renders Finder columns over them
-	Diff       *DiffStep    // diff A vs B [by …]: compare like units across two selections
-	Rollout    *RolloutStep // rollout [stage <name>]: open one ChangeOrder as a rollout
+	Columns     []Column // empty with Star=true means the entity's default columns
+	Star        bool
+	From        Source
+	Scope       *Scope   // nil: session scope
+	Filters     []Filter // in step order
+	ColumnsPos  int      // Filters[:ColumnsPos] come before the columns step when printed
+	GroupBy     []Ref
+	OrderBy     []OrderItem
+	Limit       *int
+	Browse      []Ref            // browse by axes; the TUI renders Finder columns over them
+	Diff        *DiffStep        // diff A vs B [by …]: compare like units across two selections
+	ChangeOrder *ChangeOrderStep // change order [stage <name>]: open one ChangeOrder as a change order
 }
 
-// RolloutStep opens the one ChangeOrder the statement selects as a rollout:
+// ChangeOrderStep opens the one ChangeOrder the statement selects as a change order:
 // its ChangeWorkflow's stages, where the change has got to, the gates on the
 // next hop. Stage preselects a stage in the view.
-type RolloutStep struct {
+type ChangeOrderStep struct {
 	Stage string
 }
 

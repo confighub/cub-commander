@@ -1,4 +1,4 @@
-package rollout
+package changeorder
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 // in one space that has taken it. Opt in with
 //
 //	COMMANDER_ROLLOUT_LIVE_ORDER=<space>/<slug> CUB_SERVER=… CUB_TOKEN=$(cub auth get-token) \
-//	  go test ./internal/rollout -run TestLive -v
+//	  go test ./internal/changeorder -run TestLive -v
 //
 // It writes nothing: a dry run plans and evaluates gates without a write.
 func TestLive(t *testing.T) {

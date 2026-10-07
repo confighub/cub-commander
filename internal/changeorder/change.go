@@ -1,4 +1,4 @@
-package rollout
+package changeorder
 
 import (
 	"context"
@@ -72,7 +72,7 @@ type unitInfo struct {
 	Slug, Upstream string
 }
 
-// lineage caches, per Rollout, what following units to the base needs.
+// lineage caches, per Change order, what following units to the base needs.
 type lineage struct {
 	mu       sync.Mutex
 	list     []UnitChange                   // the ordered change, as Change returns it
@@ -81,7 +81,7 @@ type lineage struct {
 	upstream map[string]string              // space ID → upstream space ID
 }
 
-func (r *Rollout) lineage(ctx context.Context, c Client) (*lineage, error) {
+func (r *ChangeOrder) lineage(ctx context.Context, c Client) (*lineage, error) {
 	if r.lc == nil {
 		r.lc = &lineageCache{}
 	}
@@ -114,7 +114,7 @@ func (r *Rollout) lineage(ctx context.Context, c Client) (*lineage, error) {
 
 // OrderedChange is the change order's own change in its base, read once per
 // reading and shared with the kept-field derivation.
-func OrderedChange(ctx context.Context, c Client, r *Rollout) ([]UnitChange, error) {
+func OrderedChange(ctx context.Context, c Client, r *ChangeOrder) ([]UnitChange, error) {
 	l, err := r.lineage(ctx, c)
 	if err != nil {
 		return nil, err
@@ -125,7 +125,7 @@ func OrderedChange(ctx context.Context, c Client, r *Rollout) ([]UnitChange, err
 // ChangeIn is the change in one space -- the ordered change for the base,
 // what the promotion wrote for any other -- with the ordered change's fields
 // the space did not take marked as kept.
-func ChangeIn(ctx context.Context, c Client, r *Rollout, spaceID string) ([]UnitChange, error) {
+func ChangeIn(ctx context.Context, c Client, r *ChangeOrder, spaceID string) ([]UnitChange, error) {
 	if spaceID == r.Order.SpaceID {
 		return OrderedChange(ctx, c, r)
 	}
@@ -179,7 +179,7 @@ func (l *lineage) spaceUnits(ctx context.Context, c Client, spaceID string) (map
 
 // rootChange follows a unit up to the base and returns the ordered change
 // for the base unit it descends from, if the change touched it.
-func (l *lineage) rootChange(ctx context.Context, c Client, r *Rollout, spaceID, unitID string) (UnitChange, bool) {
+func (l *lineage) rootChange(ctx context.Context, c Client, r *ChangeOrder, spaceID, unitID string) (UnitChange, bool) {
 	for hop := 0; hop < 8 && spaceID != ""; hop++ {
 		if spaceID == r.Order.SpaceID {
 			uc, ok := l.ordered[unitID]

@@ -1,4 +1,4 @@
-package rollout
+package changeorder
 
 import (
 	"context"
@@ -230,7 +230,7 @@ func (p *Preview) Changed() (units, fields int) {
 // request `cub variant promote --change-order … --target-stage … --dry-run
 // -o mutations` makes, and reads what each unit would change. The ordered
 // change's fields a merge leaves alone are added as Kept.
-func PreviewStage(ctx context.Context, c Client, r *Rollout, stage int) (*Preview, error) {
+func PreviewStage(ctx context.Context, c Client, r *ChangeOrder, stage int) (*Preview, error) {
 	if stage <= 0 || stage >= len(r.Stages) {
 		return nil, fmt.Errorf("no such stage")
 	}
@@ -428,7 +428,7 @@ type Outcome struct {
 // Plan of the dry run the reader saw; the server refuses (412) when it would
 // now do anything different. The result is also returned so a caller can
 // read the gates of a refusal.
-func PromoteStage(ctx context.Context, c Client, r *Rollout, stage int, expectedPlan string) ([]Outcome, *PlanResult, error) {
+func PromoteStage(ctx context.Context, c Client, r *ChangeOrder, stage int, expectedPlan string) ([]Outcome, *PlanResult, error) {
 	if stage <= 0 || stage >= len(r.Stages) {
 		return nil, nil, fmt.Errorf("no such stage")
 	}
@@ -499,7 +499,7 @@ func PromoteStage(ctx context.Context, c Client, r *Rollout, stage int, expected
 }
 
 // PromoteCommands are the CLI lines a promote of this stage stands for.
-func PromoteCommands(r *Rollout, stage int, expectedPlan string) []string {
+func PromoteCommands(r *ChangeOrder, stage int, expectedPlan string) []string {
 	if stage <= 0 || stage >= len(r.Stages) {
 		return nil
 	}
@@ -512,7 +512,7 @@ func PromoteCommands(r *Rollout, stage int, expectedPlan string) []string {
 
 // PromoteRequest is the request body a promote of this stage sends, for
 // showing before the confirm.
-func PromoteRequest(r *Rollout, stage int, expectedPlan string) string {
+func PromoteRequest(r *ChangeOrder, stage int, expectedPlan string) string {
 	req := map[string]any{"ChangeOrderID": r.Order.ID, "TargetStage": r.Stages[stage].Name}
 	if expectedPlan != "" {
 		req["ExpectedPlan"] = expectedPlan

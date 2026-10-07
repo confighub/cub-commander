@@ -24,7 +24,7 @@ cub commander --scout-binary /absolute/path/to/cub-scout --scout-binding '<targe
 ```
 
 Open a Resource row and select `3 Evidence`; `r` refreshes. This tab is read-only;
-existing Data editing and rollout actions are separate. See
+existing Data editing and change order actions are separate. See
 [resource evidence](docs/resource-evidence.md) for scope, examples and proof.
 See [v0.3.0 release notes](docs/releases/v0.3.0.md) for pinned install/upgrade
 commands, package verification and known validation limits.
@@ -48,7 +48,7 @@ make plugin        # builds and runs: cub plugin install ./bin/cub-commander
 ```
 
 Queries and the Evidence tab are read-only. `e` on a unit's Data tab opens `$EDITOR`
-and saves your edit as a new revision, guarded by the hash you read; rollout
+and saves your edit as a new revision, guarded by the hash you read; change order
 promotion and release are separate, confirmation-gated writes. The first screen is the "browse by"
 chooser; `^/` shows the keys. This is an early lab, so expect rough edges and a moving
 language; the design is in `docs/design.md`.

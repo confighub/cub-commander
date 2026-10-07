@@ -1,4 +1,4 @@
-package rollout
+package changeorder
 
 import (
 	"context"
@@ -41,7 +41,7 @@ const awaitingTriggers = "awaiting/triggers"
 // first waits for the awaiting/triggers gate to clear on the space's units,
 // as the CLI's --wait does after a promote. A stage's ReleasePrerequisites
 // are the server's to enforce; its refusal is reported per space.
-func ReleaseStage(ctx context.Context, c Client, r *Rollout, stage int) ([]ReleaseOutcome, error) {
+func ReleaseStage(ctx context.Context, c Client, r *ChangeOrder, stage int) ([]ReleaseOutcome, error) {
 	if stage <= 0 || stage >= len(r.Stages) {
 		return nil, fmt.Errorf("no such stage")
 	}
@@ -99,7 +99,7 @@ func ReleaseStage(ctx context.Context, c Client, r *Rollout, stage int) ([]Relea
 
 // ReleaseRequest is the body each publish sends: the end tag to pin to and
 // the change order the release is published for.
-func ReleaseRequest(r *Rollout) string {
+func ReleaseRequest(r *ChangeOrder) string {
 	b, _ := json.Marshal(map[string]string{"TagID": r.Order.EndTagID, "ChangeOrderID": r.Order.ID})
 	return string(b)
 }
@@ -139,7 +139,7 @@ func waitForTriggers(ctx context.Context, c Client, spaceID string) ([]string, e
 
 // ReleaseCommands are the CLI lines a release of this stage stands for, one
 // per space that would be published.
-func ReleaseCommands(r *Rollout, stage int) []string {
+func ReleaseCommands(r *ChangeOrder, stage int) []string {
 	if stage <= 0 || stage >= len(r.Stages) {
 		return nil
 	}
@@ -157,7 +157,7 @@ func ReleaseCommands(r *Rollout, stage int) []string {
 // marked as taken, so a release that follows the promote in one action does
 // not skip them: the server's ResolvedSpaceIDs would say the same once
 // re-read, and B has not re-read yet.
-func AfterPromote(r *Rollout, promoted []Outcome) *Rollout {
+func AfterPromote(r *ChangeOrder, promoted []Outcome) *ChangeOrder {
 	if len(promoted) == 0 {
 		return r
 	}

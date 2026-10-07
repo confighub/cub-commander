@@ -18,12 +18,12 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/confighub/cub-commander/internal/catalog"
+	"github.com/confighub/cub-commander/internal/changeorder"
 	"github.com/confighub/cub-commander/internal/cubclient"
 	"github.com/confighub/cub-commander/internal/exec"
 	"github.com/confighub/cub-commander/internal/history"
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
-	"github.com/confighub/cub-commander/internal/rollout"
 	"github.com/confighub/cub-commander/internal/scout"
 )
 
@@ -35,7 +35,7 @@ const (
 	modeText
 	modeBrowse
 	modeDiff
-	modeRollout
+	modeChangeOrder
 )
 
 type focus int
@@ -102,9 +102,9 @@ type Model struct {
 	evidenceContext    context.Context
 	evidenceGeneration uint64
 
-	// rollout
-	rollGen       int
-	roll          *rolloutState
+	// change order
+	orderGen      int
+	order         *changeOrderState
 	changeLoader  ChangeLoader
 	previewLoader PreviewLoader
 	promoter      Promoter
@@ -268,16 +268,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.afterEdit(msg)
 	case savedMsg:
 		return m, m.afterSave(msg)
-	case rolloutMsg:
-		return m, m.rolloutLoaded(msg)
+	case changeOrderMsg:
+		return m, m.changeOrderLoaded(msg)
 	case changeMsg:
 		m.changeLoaded(msg)
 		return m, nil
 	case previewMsg:
 		m.previewLoaded(msg)
 		return m, nil
-	case rolloutTickMsg:
-		return m.rolloutTick(msg)
+	case changeOrderTickMsg:
+		return m.changeOrderTick(msg)
 	case actionMsg:
 		return m.actionDone(msg)
 	case diffMsg:
@@ -401,7 +401,7 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.pickerKey(k)
 	}
 	// And a write waiting for confirmation: y runs it, anything else cancels.
-	if m.mode == modeRollout && m.roll != nil && m.roll.confirm != nil {
+	if m.mode == modeChangeOrder && m.order != nil && m.order.confirm != nil {
 		return m.confirmKey(k)
 	}
 	// Global.
@@ -437,8 +437,8 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+x":
 		if m.plan != nil {
 			body := m.plan.Explain("") + "\n" + m.plan.CubCommand()
-			if m.mode == modeRollout && m.roll != nil {
-				body += "\n" + strings.Join(m.roll.ro.CubCommands(), "\n")
+			if m.mode == modeChangeOrder && m.order != nil {
+				body += "\n" + strings.Join(m.order.ro.CubCommands(), "\n")
 			}
 			m.showText("EXPLAIN", body)
 			m.focus = focusMain
@@ -454,7 +454,7 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case m.chooserOpen && (m.result != nil || m.browse != nil):
 			m.chooserOpen = false
 		case m.mode == modeDetail:
-			if m.det != nil && (m.det.from == modeBrowse || m.det.from == modeDiff || m.det.from == modeResults || m.det.from == modeRollout && m.roll != nil) {
+			if m.det != nil && (m.det.from == modeBrowse || m.det.from == modeDiff || m.det.from == modeResults || m.det.from == modeChangeOrder && m.order != nil) {
 				m.mode = m.det.from
 			} else if m.result != nil {
 				m.mode = modeResults
@@ -463,10 +463,10 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		case m.mode == modeText && m.textFrom == modeDetail && m.det != nil:
 			m.mode = modeDetail
-		case m.mode == modeText && (m.textFrom == modeBrowse && m.browse != nil || m.textFrom == modeDiff && m.diff != nil || m.textFrom == modeRollout && m.roll != nil):
+		case m.mode == modeText && (m.textFrom == modeBrowse && m.browse != nil || m.textFrom == modeDiff && m.diff != nil || m.textFrom == modeChangeOrder && m.order != nil):
 			m.mode = m.textFrom
-		case m.mode == modeRollout:
-			m.rolloutBack()
+		case m.mode == modeChangeOrder:
+			m.changeOrderBack()
 		case m.mode == modeText && m.result != nil:
 			m.mode = modeResults
 		case m.mode == modeDiff:
@@ -490,8 +490,8 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.focus == focusMain && m.mode == modeDetail && !m.drawerOpen {
 			return m.detailKey(k) // Tab switches detail tabs; ⇧Tab still moves focus
 		}
-		if m.focus == focusMain && m.mode == modeRollout && !m.drawerOpen && !m.chooserOpen {
-			return m.rolloutKey(k) // Tab switches panes; ⇧Tab still moves focus
+		if m.focus == focusMain && m.mode == modeChangeOrder && !m.drawerOpen && !m.chooserOpen {
+			return m.changeOrderKey(k) // Tab switches panes; ⇧Tab still moves focus
 		}
 		if m.focus != focusCmd || m.drawerOpen {
 			m.toggleFocus()
@@ -515,8 +515,8 @@ func (m Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.mode == modeDiff {
 			return m.diffKey(k)
 		}
-		if m.mode == modeRollout {
-			return m.rolloutKey(k)
+		if m.mode == modeChangeOrder {
+			return m.changeOrderKey(k)
 		}
 		if m.mode == modeDetail {
 			return m.detailKey(k)
@@ -741,7 +741,7 @@ func (m Model) mainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		if m.plan != nil && m.plan.Entity.Name == "ChangeOrder" {
-			return m.openRollout()
+			return m.openChangeOrder()
 		}
 		m.openDetail()
 		return m, nil
@@ -764,9 +764,9 @@ func (m Model) mainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// openRollout rewrites the statement to open the selected ChangeOrder row
-// as a rollout; ^O still opens the plain detail.
-func (m Model) openRollout() (tea.Model, tea.Cmd) {
+// openChangeOrder rewrites the statement to open the selected ChangeOrder row
+// as a change order; ^O still opens the plain detail.
+func (m Model) openChangeOrder() (tea.Model, tea.Cmd) {
 	if m.result == nil || m.result.Raw == nil {
 		return m, nil
 	}
@@ -774,14 +774,14 @@ func (m Model) openRollout() (tea.Model, tea.Cmd) {
 	if i < 0 || i >= len(m.result.Raw) {
 		return m, nil
 	}
-	o := rollout.ParseOrder(m.result.Raw[i])
+	o := changeorder.ParseOrder(m.result.Raw[i])
 	if o.ID == "" {
-		m.setStatus("this row carries no ChangeOrderID; select it to open the rollout", true)
+		m.setStatus("this row carries no ChangeOrderID; select it to open the change order", true)
 		return m, nil
 	}
 	return m.rewrite(&lang.SelectStmt{Star: true, From: lang.Source{Entity: "ChangeOrder"}, Scope: &lang.Scope{Org: true},
-		Filters: []lang.Filter{{Expr: lang.Cmp{Left: lang.Ref{Path: "ChangeOrderID"}, Op: "=", Right: lang.Lit{Kind: lang.LitString, S: o.ID}}}},
-		Rollout: &lang.RolloutStep{}})
+		Filters:     []lang.Filter{{Expr: lang.Cmp{Left: lang.Ref{Path: "ChangeOrderID"}, Op: "=", Right: lang.Lit{Kind: lang.LitString, S: o.ID}}}},
+		ChangeOrder: &lang.ChangeOrderStep{}})
 }
 
 func (m *Model) openDetail() {
@@ -903,7 +903,7 @@ func (m Model) execute(src string) (tea.Model, tea.Cmd) {
 		case resultMsg:
 			x.src = src
 			return x
-		case rolloutMsg:
+		case changeOrderMsg:
 			x.src = src
 			return x
 		case textMsg:

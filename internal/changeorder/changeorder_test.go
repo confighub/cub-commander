@@ -1,4 +1,4 @@
-package rollout
+package changeorder
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func order(t *testing.T, c *MemClient, id string) *Rollout {
+func order(t *testing.T, c *MemClient, id string) *ChangeOrder {
 	t.Helper()
 	rows, err := c.List(context.Background(), "/change_order", map[string][]string{"where": {"ChangeOrderID = '" + id + "'"}})
 	if err != nil || len(rows) != 1 {

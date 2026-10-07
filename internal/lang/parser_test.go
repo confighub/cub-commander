@@ -128,7 +128,7 @@ func TestLexerErrors(t *testing.T) {
 	}
 }
 
-func TestRolloutStepRoundTrip(t *testing.T) {
+func TestChangeOrderStepRoundTrip(t *testing.T) {
 	src := "ChangeOrder | in * | where State IN ('New', 'InProgress', 'Resolved') | columns Slug, Space.Slug, state(), stage(), next(), blocker(), CreatedAt | order by CreatedAt desc"
 	st, err := ParseOne(src)
 	if err != nil {
@@ -144,16 +144,16 @@ func TestRolloutStepRoundTrip(t *testing.T) {
 	if got := StmtString(sel); !strings.Contains(got, "state(), stage(), next(), blocker()") {
 		t.Errorf("printed: %s", got)
 	}
-	st, err = ParseOne("ChangeOrder | in * | where ChangeOrderID = 'x' | rollout stage test")
+	st, err = ParseOne("ChangeOrder | in * | where ChangeOrderID = 'x' | changeorder stage test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sel = st.(*SelectStmt)
-	if sel.Rollout == nil || sel.Rollout.Stage != "test" {
-		t.Fatalf("rollout step: %+v", sel.Rollout)
+	if sel.ChangeOrder == nil || sel.ChangeOrder.Stage != "test" {
+		t.Fatalf("change order step: %+v", sel.ChangeOrder)
 	}
 	again, err := ParseOne(StmtString(sel))
-	if err != nil || again.(*SelectStmt).Rollout == nil || again.(*SelectStmt).Rollout.Stage != "test" {
+	if err != nil || again.(*SelectStmt).ChangeOrder == nil || again.(*SelectStmt).ChangeOrder.Stage != "test" {
 		t.Errorf("round trip: %v %s", err, StmtString(sel))
 	}
 }

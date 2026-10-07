@@ -265,8 +265,8 @@ func (ev *evaluator) eval(e lang.Expr, row cubclient.Row) any {
 		}
 		return ok
 	case lang.Call:
-		// A computed column the runner derived onto the row (rollout columns).
-		if m, ok := row["Rollout"].(map[string]any); ok {
+		// A computed column the runner derived onto the row (change order columns).
+		if m, ok := row["Reading"].(map[string]any); ok {
 			return m[strings.ToLower(x.Name)]
 		}
 	}

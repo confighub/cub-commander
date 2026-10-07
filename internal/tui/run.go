@@ -8,12 +8,12 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/confighub/cub-commander/internal/catalog"
+	"github.com/confighub/cub-commander/internal/changeorder"
 	"github.com/confighub/cub-commander/internal/cubclient"
 	"github.com/confighub/cub-commander/internal/exec"
 	"github.com/confighub/cub-commander/internal/history"
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
-	"github.com/confighub/cub-commander/internal/rollout"
 	"github.com/confighub/cub-commander/internal/scout"
 )
 
@@ -50,18 +50,18 @@ func Run(sess plan.Session, evidence scout.Config) error {
 	m.dataSaver = func(ctx context.Context, row cubclient.Row, text, ifMatch string) (int, error) {
 		return exec.SaveUnitData(ctx, client, row, text, ifMatch, editDescription)
 	}
-	m.changeLoader = func(ctx context.Context, ro *rollout.Rollout, spaceID string) ([]rollout.UnitChange, error) {
-		return rollout.ChangeIn(ctx, client, ro, spaceID)
+	m.changeLoader = func(ctx context.Context, ro *changeorder.ChangeOrder, spaceID string) ([]changeorder.UnitChange, error) {
+		return changeorder.ChangeIn(ctx, client, ro, spaceID)
 	}
-	m.previewLoader = func(ctx context.Context, ro *rollout.Rollout, stage int) (*rollout.Preview, error) {
-		return rollout.PreviewStage(ctx, client, ro, stage)
+	m.previewLoader = func(ctx context.Context, ro *changeorder.ChangeOrder, stage int) (*changeorder.Preview, error) {
+		return changeorder.PreviewStage(ctx, client, ro, stage)
 	}
-	m.promoter = func(ctx context.Context, ro *rollout.Rollout, stage int, plan string) ([]rollout.Outcome, error) {
-		out, _, err := rollout.PromoteStage(ctx, client, ro, stage, plan)
+	m.promoter = func(ctx context.Context, ro *changeorder.ChangeOrder, stage int, plan string) ([]changeorder.Outcome, error) {
+		out, _, err := changeorder.PromoteStage(ctx, client, ro, stage, plan)
 		return out, err
 	}
-	m.releaser = func(ctx context.Context, ro *rollout.Rollout, stage int, promoted []rollout.Outcome) ([]rollout.ReleaseOutcome, error) {
-		return rollout.ReleaseStage(ctx, client, rollout.AfterPromote(ro, promoted), stage)
+	m.releaser = func(ctx context.Context, ro *changeorder.ChangeOrder, stage int, promoted []changeorder.Outcome) ([]changeorder.ReleaseOutcome, error) {
+		return changeorder.ReleaseStage(ctx, client, changeorder.AfterPromote(ro, promoted), stage)
 	}
 	_ = live
 	_, err = tea.NewProgram(m).Run()
@@ -88,8 +88,8 @@ func DefaultRunner(c *cubclient.Client, live *catalog.Live) Runner {
 			if err != nil {
 				return nil, err
 			}
-			if p.Rollout != nil || p.RolloutCols {
-				msg, err := RolloutRunner(ctx, c, x, p, rows)
+			if p.ChangeOrder != nil || p.ChangeOrderCols {
+				msg, err := ChangeOrderRunner(ctx, c, x, p, rows)
 				if err != nil || msg != nil {
 					return msg, err
 				}

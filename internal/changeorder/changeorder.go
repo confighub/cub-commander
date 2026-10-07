@@ -1,4 +1,4 @@
-// Package rollout reads a rollout -- a ChangeOrder moving through the
+// Package change order reads a change order -- a ChangeOrder moving through the
 // ChangeWorkflow it was created under -- the way the server now tells it.
 //
 // The server owns the reading: the ChangeOrder carries a copy of its
@@ -10,7 +10,7 @@
 // the CLI's words and refuses with them. This package asks for those and
 // arranges them for a screen; it derives nothing the server would derive
 // differently.
-package rollout
+package changeorder
 
 import (
 	"context"
@@ -289,8 +289,8 @@ func Open(gates []Gate) bool {
 	return ok == total
 }
 
-// Rollout is the reading of one ChangeOrder.
-type Rollout struct {
+// Change order is the reading of one ChangeOrder.
+type ChangeOrder struct {
 	Order       Order
 	Workflow    *Workflow
 	WorkflowRef string // the workflow's slug (the order carries a copy of it)
@@ -324,17 +324,17 @@ type lineageCache struct {
 
 // Reached is the stage the server records the change as having reached:
 // "" while it has not finished the first one, Completed at the end.
-func (r *Rollout) Reached() string { return r.Order.Stage }
+func (r *ChangeOrder) Reached() string { return r.Order.Stage }
 
 // NextName is the stage the change would advance into, or "".
-func (r *Rollout) NextName() string {
+func (r *ChangeOrder) NextName() string {
 	if r.Next <= 0 || r.Next >= len(r.Stages) {
 		return ""
 	}
 	return r.Stages[r.Next].Name
 }
 
-// Cache remembers what is the same across the rollouts of one run: the
+// Cache remembers what is the same across the change orders of one run: the
 // spaces a stage clause selects, the releases read for health, and the gate
 // dry runs. Live status must be re-read on the next run, so a Cache lives
 // for one statement. Workflow slugs never change and are cached for the process.
@@ -358,13 +358,13 @@ var workflowSlugs sync.Map
 
 const spaceSelect = "SpaceID,Slug,Labels,Annotations,ReleaseTargetID,UpstreamSpaceID,ComponentID,Component.Slug"
 
-// Load reads the rollout for one ChangeOrder row.
-func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*Rollout, error) {
+// Load reads the change order for one ChangeOrder row.
+func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*ChangeOrder, error) {
 	if cache == nil {
 		cache = NewCache()
 	}
 	o := ParseOrder(row)
-	r := &Rollout{Order: o, Workflow: o.Workflow, Next: -1, lc: &lineageCache{}}
+	r := &ChangeOrder{Order: o, Workflow: o.Workflow, Next: -1, lc: &lineageCache{}}
 
 	// The base space, the workflow's name and the gate dry run follow from
 	// the order alone; read them together.
@@ -401,7 +401,7 @@ func Load(ctx context.Context, c Client, cache *Cache, row cubclient.Row) (*Roll
 	}
 	if o.Workflow == nil {
 		if r.State == "" {
-			r.State, r.Blocker = StateNoWorkflow, "No ChangeWorkflow governs this rollout, so it has no stages."
+			r.State, r.Blocker = StateNoWorkflow, "No ChangeWorkflow governs this change order, so it has no stages."
 		}
 		return r, nil
 	}
@@ -483,7 +483,7 @@ func releaseOf(o Order, spaceID string) string {
 // and the dry run. The dry run answers for the next stage; the final reading,
 // which the server only records on a write, is taken from the bits so that a
 // release or a health report shows up before the next promotion asks.
-func derive(r *Rollout, planErr error) {
+func derive(r *ChangeOrder, planErr error) {
 	o := r.Order
 	wfStages := r.Stages[1:]
 	// Where the change would go next, by the bits: the first stage some
@@ -620,7 +620,7 @@ func unhealthy(sp Space) string {
 	case !sp.Releasable:
 		return fmt.Sprintf("Variant '%s' has no ReleaseTargetID, so its health cannot be determined", v)
 	case !sp.Released:
-		return fmt.Sprintf("Variant '%s' has not released change order's revisions", v)
+		return fmt.Sprintf("Variant '%s' has not released the change order's revisions", v)
 	case !sp.Health.Present:
 		return fmt.Sprintf("no live status has been reported for Variant '%s'", v)
 	case sp.Health.Sync != "Synced":
@@ -742,7 +742,7 @@ func parseSpace(row cubclient.Row) (Space, string) {
 }
 
 // CubCommands are the CLI lines behind the reading.
-func (r *Rollout) CubCommands() []string {
+func (r *ChangeOrder) CubCommands() []string {
 	out := []string{fmt.Sprintf("cub changeorder get %s --space %s", r.Order.Slug, r.Order.SpaceSlug)}
 	if r.Workflow != nil && r.Next > 0 {
 		out = append(out, fmt.Sprintf("cub variant promote --change-order %s --target-stage %s --dry-run -o mutations", r.Order.Ref(), r.NextName()))
@@ -832,7 +832,7 @@ func firstNonEmpty(vals ...string) string {
 }
 
 // Text renders the reading as plain text, for `-e` and for logs.
-func (r *Rollout) Text() string {
+func (r *ChangeOrder) Text() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  %s\n", r.Order.Slug, r.Order.Description)
 	fmt.Fprintf(&b, "state %s · stage %s · %s · blocker: %s\n", r.Order.State, firstNonEmpty(r.Order.Stage, "-"), r.State, r.Blocker)

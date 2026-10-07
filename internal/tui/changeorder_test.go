@@ -9,17 +9,17 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/confighub/cub-commander/internal/changeorder"
 	"github.com/confighub/cub-commander/internal/exec"
 	"github.com/confighub/cub-commander/internal/lang"
 	"github.com/confighub/cub-commander/internal/plan"
-	"github.com/confighub/cub-commander/internal/rollout"
 )
 
-func init() { rolloutRefreshEvery = time.Millisecond } // never wait on the auto-refresh in tests
+func init() { changeOrderRefreshEvery = time.Millisecond } // never wait on the auto-refresh in tests
 
-// stubRollouts answers ChangeOrder statements from the chapter-1 fixture,
-// reading rollouts exactly as the real runner does.
-func stubRollouts(t *testing.T, mem *rollout.MemClient) Runner {
+// stubChangeOrders answers ChangeOrder statements from the chapter-1 fixture,
+// reading change orders exactly as the real runner does.
+func stubChangeOrders(t *testing.T, mem *changeorder.MemClient) Runner {
 	return func(ctx context.Context, st lang.Stmt, sess plan.Session) (tea.Msg, error) {
 		sel := st.(*lang.SelectStmt)
 		p, err := plan.Compile(sel, sess)
@@ -30,7 +30,7 @@ func stubRollouts(t *testing.T, mem *rollout.MemClient) Runner {
 		if err != nil {
 			return nil, err
 		}
-		if msg, err := RolloutRunner(ctx, mem, sel, p, rows); err != nil || msg != nil {
+		if msg, err := ChangeOrderRunner(ctx, mem, sel, p, rows); err != nil || msg != nil {
 			return msg, err
 		}
 		res, err := exec.Local(p, rows)
@@ -41,26 +41,26 @@ func stubRollouts(t *testing.T, mem *rollout.MemClient) Runner {
 	}
 }
 
-func openRollouts(t *testing.T) (tea.Model, *rollout.MemClient) {
+func openChangeOrders(t *testing.T) (tea.Model, *changeorder.MemClient) {
 	t.Helper()
-	mem := rollout.ChapterOne()
-	var m tea.Model = New(planSession(), stubRollouts(t, mem), nil, nil)
+	mem := changeorder.ChapterOne()
+	var m tea.Model = New(planSession(), stubChangeOrders(t, mem), nil, nil)
 	mm := m.(Model)
-	mm.changeLoader = func(ctx context.Context, ro *rollout.Rollout, spaceID string) ([]rollout.UnitChange, error) {
-		return rollout.ChangeIn(ctx, mem, ro, spaceID)
+	mm.changeLoader = func(ctx context.Context, ro *changeorder.ChangeOrder, spaceID string) ([]changeorder.UnitChange, error) {
+		return changeorder.ChangeIn(ctx, mem, ro, spaceID)
 	}
-	mm.previewLoader = func(ctx context.Context, ro *rollout.Rollout, stage int) (*rollout.Preview, error) {
-		return rollout.PreviewStage(ctx, mem, ro, stage)
+	mm.previewLoader = func(ctx context.Context, ro *changeorder.ChangeOrder, stage int) (*changeorder.Preview, error) {
+		return changeorder.PreviewStage(ctx, mem, ro, stage)
 	}
-	mm.promoter = func(ctx context.Context, ro *rollout.Rollout, stage int, plan string) ([]rollout.Outcome, error) {
-		out, _, err := rollout.PromoteStage(ctx, mem, ro, stage, plan)
+	mm.promoter = func(ctx context.Context, ro *changeorder.ChangeOrder, stage int, plan string) ([]changeorder.Outcome, error) {
+		out, _, err := changeorder.PromoteStage(ctx, mem, ro, stage, plan)
 		return out, err
 	}
 	m = mm
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 45})
 	mm = m.(Model)
 	for i, it := range mm.chooserItems {
-		if it.stmt == RolloutsPreset {
+		if it.stmt == ChangeOrdersPreset {
 			mm.chooserCursor = i
 		}
 	}
@@ -69,8 +69,8 @@ func openRollouts(t *testing.T) (tea.Model, *rollout.MemClient) {
 	return m, mem
 }
 
-func TestRolloutsPresetLists(t *testing.T) {
-	m, _ := openRollouts(t)
+func TestChangeOrdersPresetLists(t *testing.T) {
+	m, _ := openChangeOrders(t)
 	v := m.View().Content
 	for _, want := range []string{"cert-manager-1-17-0", "Degraded", "Variant 'us-east-test1' is not healthy", "catalog-api-5-3-0", "Ready to Promote", "No blocker."} {
 		if !strings.Contains(v, want) {
@@ -90,8 +90,8 @@ func TestRolloutsPresetLists(t *testing.T) {
 	}
 }
 
-func TestOpenRolloutFromRow(t *testing.T) {
-	m, mem := openRollouts(t)
+func TestOpenChangeOrderFromRow(t *testing.T) {
+	m, mem := openChangeOrders(t)
 	// a list opened from the chooser takes arrow keys straight away
 	m = press(m, "down")
 	if mm := m.(Model); mm.tbl.Cursor() != 1 {
@@ -99,23 +99,23 @@ func TestOpenRolloutFromRow(t *testing.T) {
 	}
 	m = press(m, "enter") // second row: cert-manager (the list is newest first)
 	mm := m.(Model)
-	if mm.mode != modeRollout || mm.roll == nil {
+	if mm.mode != modeChangeOrder || mm.order == nil {
 		t.Fatalf("mode %v after enter; status %s", mm.mode, mm.status)
 	}
-	if !strings.Contains(mm.cmd.Value(), "| rollout") || !strings.Contains(mm.cmd.Value(), "ChangeOrderID = 'co-cm'") {
+	if !strings.Contains(mm.cmd.Value(), "| changeorder") || !strings.Contains(mm.cmd.Value(), "ChangeOrderID = 'co-cm'") {
 		t.Errorf("statement: %s", mm.cmd.Value())
 	}
 	// opens on the next stage (prod) with its gates, as the server evaluated them
-	if mm.roll.stage != 4 {
-		t.Errorf("selected stage %d", mm.roll.stage)
+	if mm.order.stage != 4 {
+		t.Errorf("selected stage %d", mm.order.stage)
 	}
 	v := stripANSI(m.View().Content)
 	if !strings.Contains(v, "promote/release/both") || !strings.Contains(v, "full diff") {
-		t.Errorf("key bar is not the rollout one:\n%s", v)
+		t.Errorf("key bar is not the change order one:\n%s", v)
 	}
 	for _, want := range []string{"source", "bases", "dev", "test", "prod", "final", "workflow cert-manager-workflow · component cert-manager", "gates on prod: 5 of 6 satisfied", "✗ Variant 'us-east-test1' is not healthy", "✓ Released", "cert-manager-us-east-prod1", "what this promotes to cert-manager-us-east-prod1", "the server refused the dry run", "promote refused: Variant 'us-east-test1' is not healthy", "cub variant promote --change-order cert-manager-base/cert-manager-1-17-0", "--target-stage prod --dry-run"} {
 		if !strings.Contains(v, want) {
-			t.Errorf("rollout view lacks %q:\n%s", want, v)
+			t.Errorf("change order view lacks %q:\n%s", want, v)
 		}
 	}
 	// ← to test: a taken space, the change loads
@@ -139,12 +139,12 @@ func TestOpenRolloutFromRow(t *testing.T) {
 	}
 	// Tab focuses the diff pane; ↓ then scrolls it instead of moving the space
 	m = press(m, "tab", "down", "down")
-	if mm = m.(Model); mm.roll.pane != 1 || mm.roll.scroll != 2 || mm.focus != focusMain {
-		t.Errorf("tab/down: pane %d scroll %d focus %v", mm.roll.pane, mm.roll.scroll, mm.focus)
+	if mm = m.(Model); mm.order.pane != 1 || mm.order.scroll != 2 || mm.focus != focusMain {
+		t.Errorf("tab/down: pane %d scroll %d focus %v", mm.order.pane, mm.order.scroll, mm.focus)
 	}
 	m = press(m, "up", "tab")
-	if mm = m.(Model); mm.roll.pane != 0 || mm.roll.scroll != 1 {
-		t.Errorf("up/tab: pane %d scroll %d", mm.roll.pane, mm.roll.scroll)
+	if mm = m.(Model); mm.order.pane != 0 || mm.order.scroll != 1 {
+		t.Errorf("up/tab: pane %d scroll %d", mm.order.pane, mm.order.scroll)
 	}
 	m = press(m, "shift+tab")
 	if mm = m.(Model); mm.focus != focusCmd {
@@ -169,10 +169,10 @@ func TestOpenRolloutFromRow(t *testing.T) {
 		t.Errorf("full diff lacks the field line:\n%s", v)
 	}
 	m = press(m, "esc")
-	if mm = m.(Model); mm.mode != modeRollout {
+	if mm = m.(Model); mm.mode != modeChangeOrder {
 		t.Errorf("esc from text: mode %v", mm.mode)
 	}
-	// Esc leaves the rollout and restores the list statement
+	// Esc leaves the change order and restores the list statement
 	m = press(m, "esc")
 	mm = m.(Model)
 	if mm.mode != modeResults || !strings.Contains(mm.cmd.Value(), "state(), stage()") || len(mm.result.Rows) != 2 {
@@ -180,28 +180,28 @@ func TestOpenRolloutFromRow(t *testing.T) {
 	}
 }
 
-func TestRolloutStageArgumentAndFresh(t *testing.T) {
-	m, _ := openRollouts(t)
+func TestChangeOrderStageArgumentAndFresh(t *testing.T) {
+	m, _ := openChangeOrders(t)
 	mm := m.(Model)
 	mm.focus = focusCmd
 	mm.cmd.SetValue("")
 	m = mm
-	m = typeText(m, "ChangeOrder | in * | where ChangeOrderID = 'co-ca' | rollout stage dev")
+	m = typeText(m, "ChangeOrder | in * | where ChangeOrderID = 'co-ca' | changeorder stage dev")
 	m = press(m, "enter")
 	mm = m.(Model)
-	if mm.mode != modeRollout || mm.roll.stage != 2 {
-		t.Fatalf("mode %v stage %d status %s", mm.mode, mm.roll.stage, mm.status)
+	if mm.mode != modeChangeOrder || mm.order.stage != 2 {
+		t.Fatalf("mode %v stage %d status %s", mm.mode, mm.order.stage, mm.status)
 	}
 	v := m.View().Content
 	if !strings.Contains(v, "Ready to Promote") || !strings.Contains(v, "next: bases · no gates on the first stage · promote is open") {
-		t.Errorf("fresh rollout:\n%s", v)
+		t.Errorf("fresh change order:\n%s", v)
 	}
 	// the ambiguous case is refused, not guessed
 	mm = m.(Model)
 	mm.focus = focusCmd
 	mm.cmd.SetValue("")
 	m = mm
-	m = typeText(m, "ChangeOrder | in * | rollout")
+	m = typeText(m, "ChangeOrder | in * | changeorder")
 	m = press(m, "enter")
 	if mm = m.(Model); !mm.statusErr || !strings.Contains(mm.status, "matched 3") {
 		t.Errorf("status %q", mm.status)
@@ -209,12 +209,12 @@ func TestRolloutStageArgumentAndFresh(t *testing.T) {
 }
 
 func TestPreviewAndPromoteFromTUI(t *testing.T) {
-	m, mem := openRollouts(t)
+	m, mem := openChangeOrders(t)
 	// row 0 is catalog-api (fresh); it opens on bases with the dry run
 	m = press(m, "enter")
 	mm := m.(Model)
-	if mm.mode != modeRollout || mm.roll.stage != 1 {
-		t.Fatalf("mode %v stage %d", mm.mode, mm.roll.stage)
+	if mm.mode != modeChangeOrder || mm.order.stage != 1 {
+		t.Fatalf("mode %v stage %d", mm.mode, mm.order.stage)
 	}
 	v := stripANSI(m.View().Content)
 	for _, want := range []string{"what this promotes to catalog-api-dev", "api  · 2 fields", "image: catalog-api:5.2.0 → catalog-api:5.3.0", "memory: 512Mi → 1Gi", "no change: config", "P promotes this stage"} {
@@ -237,7 +237,7 @@ func TestPreviewAndPromoteFromTUI(t *testing.T) {
 	// P opens the confirm overlay with the request and the cub command; n cancels
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'P', Text: "P"})
 	mm = m.(Model)
-	if mm.roll.confirm == nil {
+	if mm.order.confirm == nil {
 		t.Fatalf("P did not open the confirm: %s", mm.status)
 	}
 	v = stripANSI(m.View().Content)
@@ -247,8 +247,8 @@ func TestPreviewAndPromoteFromTUI(t *testing.T) {
 		}
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
-	if mm = m.(Model); mm.roll.confirm != nil || len(mem.Promotes) != 0 {
-		t.Fatalf("cancel: confirm %v promotes %v", mm.roll.confirm != nil, mem.Promotes)
+	if mm = m.(Model); mm.order.confirm != nil || len(mem.Promotes) != 0 {
+		t.Fatalf("cancel: confirm %v promotes %v", mm.order.confirm != nil, mem.Promotes)
 	}
 	// P then y runs it: one promote of the stage, then a refresh and the report
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'P', Text: "P"})
@@ -268,8 +268,8 @@ func TestPreviewAndPromoteFromTUI(t *testing.T) {
 	}
 	m = press(m, "esc")
 	mm = m.(Model)
-	if mm.mode != modeRollout || mm.roll.stage != 1 {
-		t.Errorf("esc from report: mode %v stage %d", mm.mode, mm.roll.stage)
+	if mm.mode != modeChangeOrder || mm.order.stage != 1 {
+		t.Errorf("esc from report: mode %v stage %d", mm.mode, mm.order.stage)
 	}
 	// the refreshed reading has bases taken and dev next
 	if v := stripANSI(m.View().Content); !strings.Contains(v, "next: dev") {
@@ -278,9 +278,9 @@ func TestPreviewAndPromoteFromTUI(t *testing.T) {
 }
 
 func TestPromoteRefusedByGate(t *testing.T) {
-	m, _ := openRollouts(t)
+	m, _ := openChangeOrders(t)
 	mm := m.(Model)
-	mm.promoter = func(ctx context.Context, ro *rollout.Rollout, stage int, plan string) ([]rollout.Outcome, error) {
+	mm.promoter = func(ctx context.Context, ro *changeorder.ChangeOrder, stage int, plan string) ([]changeorder.Outcome, error) {
 		t.Error("promoter called past a failing gate")
 		return nil, nil
 	}
@@ -289,8 +289,8 @@ func TestPromoteRefusedByGate(t *testing.T) {
 	m = press(m, "enter")
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'P', Text: "P"})
 	mm = m.(Model)
-	if mm.roll.confirm != nil || !mm.statusErr || !strings.Contains(mm.status, "Variant 'us-east-test1' is not healthy") {
-		t.Errorf("confirm %v status %q", mm.roll.confirm != nil, mm.status)
+	if mm.order.confirm != nil || !mm.statusErr || !strings.Contains(mm.status, "Variant 'us-east-test1' is not healthy") {
+		t.Errorf("confirm %v status %q", mm.order.confirm != nil, mm.status)
 	}
 	// on a stage that is not the next one, P says which is
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
@@ -301,31 +301,31 @@ func TestPromoteRefusedByGate(t *testing.T) {
 }
 
 func TestReleaseFromTUI(t *testing.T) {
-	m, mem := openRollouts(t)
+	m, mem := openChangeOrders(t)
 	mm := m.(Model)
-	mm.releaser = func(ctx context.Context, ro *rollout.Rollout, stage int, promoted []rollout.Outcome) ([]rollout.ReleaseOutcome, error) {
-		return rollout.ReleaseStage(ctx, mem, rollout.AfterPromote(ro, promoted), stage)
+	mm.releaser = func(ctx context.Context, ro *changeorder.ChangeOrder, stage int, promoted []changeorder.Outcome) ([]changeorder.ReleaseOutcome, error) {
+		return changeorder.ReleaseStage(ctx, mem, changeorder.AfterPromote(ro, promoted), stage)
 	}
 	mm.tbl.SetCursor(1) // cert-manager: opens on prod
 	m = mm
 	m = press(m, "enter")
 	// L on prod: nothing has taken it
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'L', Text: "L"})
-	if mm = m.(Model); mm.roll.confirm != nil || !strings.Contains(mm.status, "has not taken the change yet") {
-		t.Fatalf("L on prod: confirm %v status %q", mm.roll.confirm != nil, mm.status)
+	if mm = m.(Model); mm.order.confirm != nil || !strings.Contains(mm.status, "has not taken the change yet") {
+		t.Fatalf("L on prod: confirm %v status %q", mm.order.confirm != nil, mm.status)
 	}
 	// ← to test, pretend test2 is unreleased, L opens the overlay with the publish line
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	mm = m.(Model)
-	for i := range mm.roll.ro.Stages[3].Spaces {
-		if mm.roll.ro.Stages[3].Spaces[i].Slug == "cert-manager-us-east-test2" {
-			mm.roll.ro.Stages[3].Spaces[i].Released = false
+	for i := range mm.order.ro.Stages[3].Spaces {
+		if mm.order.ro.Stages[3].Spaces[i].Slug == "cert-manager-us-east-test2" {
+			mm.order.ro.Stages[3].Spaces[i].Released = false
 		}
 	}
 	m = mm
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'L', Text: "L"})
 	mm = m.(Model)
-	if mm.roll.confirm == nil {
+	if mm.order.confirm == nil {
 		t.Fatalf("L did not open the confirm: %s", mm.status)
 	}
 	v := stripANSI(m.View().Content)
@@ -353,20 +353,20 @@ func TestReleaseFromTUI(t *testing.T) {
 }
 
 func TestPromoteAndReleaseFromTUI(t *testing.T) {
-	m, mem := openRollouts(t)
+	m, mem := openChangeOrders(t)
 	mm := m.(Model)
-	mm.releaser = func(ctx context.Context, ro *rollout.Rollout, stage int, promoted []rollout.Outcome) ([]rollout.ReleaseOutcome, error) {
-		return rollout.ReleaseStage(ctx, mem, rollout.AfterPromote(ro, promoted), stage)
+	mm.releaser = func(ctx context.Context, ro *changeorder.ChangeOrder, stage int, promoted []changeorder.Outcome) ([]changeorder.ReleaseOutcome, error) {
+		return changeorder.ReleaseStage(ctx, mem, changeorder.AfterPromote(ro, promoted), stage)
 	}
 	m = mm
 	m = press(m, "enter") // catalog-api, next = bases (no release targets)
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'B', Text: "B"})
-	if mm = m.(Model); mm.roll.confirm != nil || !strings.Contains(mm.status, "no release targets") {
+	if mm = m.(Model); mm.order.confirm != nil || !strings.Contains(mm.status, "no release targets") {
 		t.Fatalf("B on bases: %q", mm.status)
 	}
 	// land bases on the server, refresh: dev is next and has a target
 	mm = m.(Model)
-	if _, _, err := rollout.PromoteStage(context.Background(), mem, mm.roll.ro, 1, ""); err != nil {
+	if _, _, err := changeorder.PromoteStage(context.Background(), mem, mm.order.ro, 1, ""); err != nil {
 		t.Fatal(err)
 	}
 	m, cmd := m.Update(tea.KeyPressMsg{Code: 'R', Text: "R"})
@@ -374,8 +374,8 @@ func TestPromoteAndReleaseFromTUI(t *testing.T) {
 	m, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // → dev, which runs its preview
 	m = runCmd(m, cmd, 0)
 	mm = m.(Model)
-	if mm.roll.stage != 2 || mm.roll.ro.NextName() != "dev" {
-		t.Fatalf("stage %d next %q", mm.roll.stage, mm.roll.ro.NextName())
+	if mm.order.stage != 2 || mm.order.ro.NextName() != "dev" {
+		t.Fatalf("stage %d next %q", mm.order.stage, mm.order.ro.NextName())
 	}
 	// dev1 lacks config: the server clones it, and the preview says so
 	if v := stripANSI(m.View().Content); !strings.Contains(v, "would add from upstream: config") {
@@ -383,7 +383,7 @@ func TestPromoteAndReleaseFromTUI(t *testing.T) {
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'B', Text: "B"})
 	mm = m.(Model)
-	if mm.roll.confirm == nil {
+	if mm.order.confirm == nil {
 		t.Fatalf("B did not open the confirm: %q", mm.status)
 	}
 	v := stripANSI(m.View().Content)
@@ -394,46 +394,46 @@ func TestPromoteAndReleaseFromTUI(t *testing.T) {
 	}
 }
 
-func TestRolloutAutoRefresh(t *testing.T) {
-	m, mem := openRollouts(t)
+func TestChangeOrderAutoRefresh(t *testing.T) {
+	m, mem := openChangeOrders(t)
 	mm := m.(Model)
 	mm.tbl.SetCursor(1)
 	m = mm
 	m = press(m, "enter")
 	mm = m.(Model)
-	gen := mm.roll.gen
+	gen := mm.order.gen
 	before := len(mem.Log)
 	// the tick for this reading re-runs the statement quietly and keeps the
 	// position, the loaded dry run and the loaded diffs (re-running them redrew
 	// the pane every period)
-	mm.roll.stage = 3
-	loaded := &rollout.Preview{}
-	mm.roll.previews[3] = loaded
-	mm.roll.changes["kept"] = nil
+	mm.order.stage = 3
+	loaded := &changeorder.Preview{}
+	mm.order.previews[3] = loaded
+	mm.order.changes["kept"] = nil
 	m = mm
-	m, cmd := m.Update(rolloutTickMsg{gen: gen})
+	m, cmd := m.Update(changeOrderTickMsg{gen: gen})
 	if cmd == nil {
 		t.Fatal("tick did not refresh")
 	}
 	m = runCmd(m, cmd, 0)
 	mm = m.(Model)
-	if mm.mode != modeRollout || mm.roll.stage != 3 || mm.roll.gen == gen || len(mem.Log) == before || mm.running {
-		t.Errorf("after tick: mode %v stage %d gen %d→%d requests %d→%d running %v", mm.mode, mm.roll.stage, gen, mm.roll.gen, before, len(mem.Log), mm.running)
+	if mm.mode != modeChangeOrder || mm.order.stage != 3 || mm.order.gen == gen || len(mem.Log) == before || mm.running {
+		t.Errorf("after tick: mode %v stage %d gen %d→%d requests %d→%d running %v", mm.mode, mm.order.stage, gen, mm.order.gen, before, len(mem.Log), mm.running)
 	}
-	if mm.roll.previews[3] != loaded {
+	if mm.order.previews[3] != loaded {
 		t.Error("tick dropped the loaded dry run")
 	}
-	if _, ok := mm.roll.changes["kept"]; !ok {
+	if _, ok := mm.order.changes["kept"]; !ok {
 		t.Error("tick dropped the loaded diffs")
 	}
 	// R re-reads everything, the dry run included
 	m = press(m, "R")
 	mm = m.(Model)
-	if mm.roll.previews[3] == loaded {
+	if mm.order.previews[3] == loaded {
 		t.Error("R kept the old dry run")
 	}
 	// a stale tick (an older reading's) does nothing
-	m, cmd = m.Update(rolloutTickMsg{gen: gen})
+	m, cmd = m.Update(changeOrderTickMsg{gen: gen})
 	if cmd != nil {
 		t.Error("stale tick refreshed")
 	}

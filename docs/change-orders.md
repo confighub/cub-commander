@@ -1,13 +1,13 @@
-# cub commander — rollouts
+# cub commander — change orders
 
 *Design, 2026-09-05. The steel thread is chapter 1 of the change-workflows walkthrough
 (cub-demo, branch `docs/change-workflows-demo`, `docs/change-workflows-walkthrough.md`): CI
-opens a change order; someone sees a rollout in flight; reviews the change; previews and
+opens a change order; someone sees a change order in flight; reviews the change; previews and
 promotes stage by stage, releasing where the next gate asks for it, until the workflow's
 final check holds. Commander covers everything after the change order exists.*
 
 Vocabulary and semantics come from `confighub/docs/design/change-workflows.md` (v4, final)
-and the CLI. Commander does not invent rollout semantics: where the spec leaves something
+and the CLI. Commander does not invent change-order semantics: where the spec leaves something
 open, this page says so and the roadmap marks it gated.
 
 ## 1. What the platform gives us
@@ -16,14 +16,14 @@ open, this page says so and the roadmap marks it gated.
 stages and gates on the client, as the spec's Q12 then required; the server owns them now
 (`confighub/docs/design/promote-api.md`), and commander reads what it says.*
 
-**A rollout is a ChangeOrder plus the ChangeWorkflow copy it carries.** The ChangeOrder
+**Commander reads a ChangeOrder together with the ChangeWorkflow copy it carries.** The ChangeOrder
 records the stage it has reached and the promotions and releases that got it there; the one
 thing still read on the client is the picture around that: which spaces each stage holds and
 what each has done.
 
 | Fact | Where it comes from |
 |---|---|
-| The rollouts in flight | `GET /change_order` org-wide; `State` in `New, InProgress, Resolved` is moving, `Released` is done by state, `Aborted/Restored/RestoreReleased` are the undo family. |
+| The change orders in flight | `GET /change_order` org-wide; `State` in `New, InProgress, Resolved` is moving, `Released` is done by state, `Aborted/Restored/RestoreReleased` are the undo family. |
 | The workflow governing one | `ChangeOrder.ChangeWorkflow`, a `ChangeWorkflowSpec` copied onto the order when it was created (stages with `WhereSpace`, `Prerequisites`, `ReleasePrerequisites`; `Final`; custom and attestation prerequisites). `ChangeWorkflowID` names the entity, read once for its slug. |
 | The stage reached | `ChangeOrder.Stage`, set by the server on every promotion and release publish; `Completed` once the last stage satisfies `Final`. |
 | A stage's member spaces | `GET /space?where=<stage.WhereSpace> AND SpaceID IN (<InScopeSpaceIDs>)`: the selector intersected with the order's scope, exactly as the server computes membership. Nothing else is implied, the component included. |
@@ -42,9 +42,9 @@ that what was shown is what runs.
 
 ## 2. The surface
 
-Rollouts are one more thing to browse, so they start where everything else does.
+Change orders are one more thing to browse, so they start where everything else does.
 
-**Home / chooser** gains a preset, *Rollouts in flight*, which is the statement
+**Home / chooser** gains a preset, *Change orders in flight*, which is the statement
 
 ```
 ChangeOrder | in * | where State IN ('New', 'InProgress', 'Resolved')
@@ -55,23 +55,23 @@ ChangeOrder | in * | where State IN ('New', 'InProgress', 'Resolved')
 The `state()` column uses the Web UI's vocabulary so the two surfaces agree: *Ready to
 Promote*, *Degraded* (a healthy gate failing), *Unreleased changes* (a released gate failing),
 *Progressing* (a stage partly taken), *Complete*, *Aborted*, *No ChangeWorkflow*. Complete
-and Aborted are hidden by the preset's where step, as the Rollouts page hides them by default;
+and Aborted are hidden by the preset's where step, as the Web UI's Rollouts page hides them by default;
 the count of each state sits above the grid the way the page's exception strip does, and a
-component row elsewhere in commander shows an *outstanding rollout* hint the way the component
+component row elsewhere in commander shows an *outstanding change order* hint the way the component
 overview flags it.
 
 `state()`, `stage()`, `next()` and `blocker()` are local computed columns (yellow chips, per-stage
 reasons in EXPLAIN, like function columns): resolved once per distinct workflow and once per
 (workflow, component) for stage membership, cached for the session and refreshed with the
 statement. A ChangeOrder with no workflow shows them blank, which is what the CLI does. The
-home screen shows the in-flight count next to the preset, so a new rollout is visible on the
+home screen shows the in-flight count next to the preset, so a new change order is visible on the
 first screen; the status line repeats it after every refresh.
 
-**Enter on a ChangeOrder row opens rollout mode** (`modeRollout`), a new mode alongside
+**Enter on a ChangeOrder row opens change order mode** (`modeChangeOrder`), a new mode alongside
 results, detail, browse and diff. Its readout is
 
 ```
-ChangeOrder catalog-api-base/catalog-api-5-3-0 | rollout [stage test]
+ChangeOrder catalog-api-base/catalog-api-5-3-0 | changeorder [stage test]
 ```
 
 so history, EXPLAIN and the statement editor keep working; Esc returns to the list.
@@ -118,7 +118,7 @@ workflow catalog-api-workflow @rev 3 · component catalog-api · 6 of 7 spaces t
   to the space, `u` to its units, `Esc` back one level, `^X` shows the plan and the exact
   `cub` commands the actions would run.
 
-The mode re-reads the rollout every 10 s while open (gates are read live, and argobot's report
+The mode re-reads the change order every 10 s while open (gates are read live, and argobot's report
 is the thing people wait for in step 7), keeping the dry runs and diffs already loaded: those
 are slow, and re-running them redrew the pane every period (Jesper, 2026-09-09). `R` re-reads
 everything, the dry run included; so does the refresh after a write.
@@ -143,15 +143,15 @@ Three writes, all stage-scoped like the CLI's bulk mode, all through the same gu
 | `B` promote and release | `P` then `L` on the same stage; the UI's "Promote and release" | the two above |
 
 Not in the steel thread, shown but not driven: abort (`AbortedReason`), demote/restore,
-`cub variant approve`. The mode displays an aborted rollout as such and offers nothing.
+`cub variant approve`. The mode displays an aborted change order as such and offers nothing.
 
 No `--change-desc` is ever sent: the promoted revisions keep the pipeline's description,
 which is the audit trail the walkthrough closes on.
 
 ## 4. How it fits the code
 
-- `internal/rollout`: the reading over the server's answers. `Load(ctx, client, cache, row)`
-  → `Rollout{Order (with the Workflow copy, Promotions, Releases), Stages[]{Name, Prereqs,
+- `internal/changeorder`: the reading over the server's answers. `Load(ctx, client, cache, row)`
+  → `ChangeOrder{Order (with the Workflow copy, Promotions, Releases), Stages[]{Name, Prereqs,
   Spaces[]{Space, Taken, Released, Health}}, Next, Gates[], Completed, Plan}`; `derive` only
   picks the console state from the gates and reads the final tally from the bits; `ChangeIn`
   is the `unit_diff` per space with the kept fields; `PreviewStage` is the dry run with diffs;
@@ -159,15 +159,15 @@ which is the audit trail the walkthrough closes on.
   `GetRaw`, `Send`) so the model test runs offline on `MemClient`, whose `promote` stands in
   for the server over the same rows. `live_test.go` runs the read-only half against a real
   order when `COMMANDER_ROLLOUT_LIVE_ORDER` is set.
-- `internal/plan`: `rollout [stage <name>]` as a terminal step on a `ChangeOrder` statement;
+- `internal/plan`: `change order [stage <name>]` as a terminal step on a `ChangeOrder` statement;
   `stage()/next()/blocker()` as local computed columns; `CubCommand` prints the promote and
   publish lines for the actions so `^X` is honest. Golden tests as usual.
-- `internal/tui/rollout.go`: `rolloutState`, `rolloutKey`, `rolloutView`; registered in the
+- `internal/tui/changeorder.go`: `changeOrderState`, `changeOrderKey`, `changeOrderView`; registered in the
   key-routing order after the global chords, like the other modes. Esc goes back to the
   ChangeOrder list. Writes go through a confirm overlay checked before the global switch,
   like the popup and the picker.
 - No new dependency. Stage membership, release status and the gate dry run are cached per
-  statement (`rollout.Cache`); workflow slugs for the process.
+  statement (`changeorder.Cache`); workflow slugs for the process.
 
 ## 5. Gaps, and what commander does about each
 
@@ -199,26 +199,26 @@ which is the audit trail the walkthrough closes on.
   would plan.
 - **Permissions.** The gate dry run needs `Use` on the ChangeOrder; a reader without it sees
   the strip and the bits with *Not reported* and the server's message instead of gates.
-- **Naming (Q25).** "Rollout" is the working word here, in the UI text and the `rollout`
+- **Naming (Q25).** "Reading" is the working word here, in the UI text and the `change order`
   step. Commander is a lab; if the product settles on another word the step is renamed.
 
 ## 6. Milestones
 
 | # | Milestone | Demo |
 |---|---|---|
-| R1 | Read-only rollout mode | **Shipped 2026-09-05.** `Rollouts in flight` preset with state/stage/next/blocker columns; rollout mode with the strip, per-space bits, gates in CLI wording, the source diff from tags and the per-space "what happened" diff; `-e "… \| rollout"` prints the reading as text; offline model test on the chapter-1 fixture (`rollout.ChapterOne`); verified live on the Demo org against `cub changeorder list`. |
+| R1 | Read-only change order mode | **Shipped 2026-09-05.** `Change orders in flight` preset with state/stage/next/blocker columns; change order mode with the strip, per-space bits, gates in CLI wording, the source diff from tags and the per-space "what happened" diff; `-e "… \| changeorder"` prints the reading as text; offline model test on the chapter-1 fixture (`changeorder.ChapterOne`); verified live on the Demo org against `cub changeorder list`. |
 | R2 | Preview | **Shipped 2026-09-05.** A stage not yet taken shows the server's dry run per space: fields each unit would change (semantic, layout-insensitive) and the canonical diff against current data; per-unit errors; a space missing units its upstream carries is a blocker naming them. |
 | R3 | Promote and release | **Shipped 2026-09-05.** `P`: refused with the reason unless the stage is next, the gates are open and the preview has no blockers; the overlay lists spaces, unit and field counts, the PATCH requests and the cub line; `y` runs per space, the reading refreshes, the report opens in the text view. `L`: publishes each space of the stage that has taken the change and has a release target, pinned to the end tag, after polling the `awaiting/triggers` gate off its units (90 s cap); class bases and already-released spaces are skipped and say so. `B`: both, one confirm, the release reading the promote's outcomes as taken. **Live on the Demo org:** catalog-api-5-4-0 promoted to bases and dev and released from dev through commander; the server's revision trail carries the pipeline's description, the change order and its tags; `cub variant promote --dry-run` agrees on the next step. |
 | R4 | Polish | 10 s auto-refresh, home badge, observation time on healthy, abort shown, revision picker `d` inside a space's pane. |
 | R5 | API 0.8 | **Shipped 2026-10-06 (unreleased).** Stages, gates and the plan from `POST /promote` dry runs; the change from `unit_diff`; health from `Release.LiveStatus`; cloning by the server; kept fields from `Conflicts`; one promote request with `ExpectedPlan`; releases recorded on the order. Verified read-only against the harbor-financial org (`live_test.go`); a live promote through commander waits for a change order in flight on the demo org. |
-| R6 | Next | chapter 2 (refused rollout, abort, `/demote`); attestations as gates (`ReleasePrerequisites`, `cub attestation create` from the rollout); `PromotionFailures` and overrides drawn in the mode; `Validated` gate surfaced per unit. |
+| R6 | Next | chapter 2 (refused change order, abort, `/demote`); attestations as gates (`ReleasePrerequisites`, `cub attestation create` from the change order); `PromotionFailures` and overrides drawn in the mode; `Validated` gate surfaced per unit. |
 
 ## 7. Open with Jesper
 
 1. ~~Confirm shape.~~ Settled 2026-09-05: `P` shows the cub commands and the space list and
    waits for `y`.
 2. ~~Three keys or one.~~ Settled 2026-09-05: three (`P`, `L`, `B`).
-3. ~~Where a new rollout is noticed.~~ Settled 2026-09-05: do what the UI does (above).
+3. ~~Where a new change order is noticed.~~ Settled 2026-09-05: do what the UI does (above).
 4. **The demo org.** Live work needs `cub auth login` on context `demo`, and a run of chapter
    1 consumes catalog-api until `cub demo reset`. That org is shared with the Web UI work and
    the change-workflows-demo session, so resets are coordinated, never assumed.

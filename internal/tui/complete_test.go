@@ -108,7 +108,7 @@ func TestCompleteInModel(t *testing.T) {
 	}
 	m.popupSel = 1
 	m.applyCandidate(true)
-	if !strings.HasPrefix(m.cmd.Value(), "SELECT * FROM Unit WHERE Head") || !strings.HasSuffix(m.cmd.Value(), "Num") {
+	if !strings.HasPrefix(m.cmd.Value(), "SELECT * FROM Unit WHERE Head") || !strings.HasSuffix(m.cmd.Value(), m.popup[1].Text) {
 		t.Errorf("apply: %q", m.cmd.Value())
 	}
 	if !strings.Contains(m.View().Content, m.popup[1].Text) {

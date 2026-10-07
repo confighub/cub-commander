@@ -239,7 +239,7 @@ func Compile(st *lang.SelectStmt, s Session) (*Plan, error) {
 			segs = segs[1:]
 		}
 		// A bare name is the entity's own attribute even when it is also a
-		// join prefix (ApprovedBy is a UUID list; ApprovedBy.*.Username is a join).
+		// join prefix (FromLinkID is a UUID list; FromLink.*.Slug is a join).
 		if len(segs) > 1 && ent.IsJoin(segs[0]) {
 			inc[segs[0]+"ID"] = true
 			// Name the joined field in select: the server then trims the joined

@@ -699,6 +699,11 @@ func (m *Model) presets() []chooserItem {
 	add("Unit", "Target", []string{"Target.Slug"})
 	add("Resource", "Component → Variant → Resources", path("Resource", "Component", "Variant"))
 	add("Resource", "Component → Environment → Region → Cluster → Resources", path("Resource", "Component", "Environment", "Region", "Cluster"))
+	// The Component entity: a space names its component with ComponentID, so
+	// the variants of a component group under the join rather than a label.
+	if sampled && m.live.Total("Component") > 0 {
+		items = append(items, chooserItem{label: "Space    by Component → Variant (Component entity)", stmt: "Space | in * | where ComponentID IS NOT NULL | browse by Component.Slug, " + firstNonEmpty(axis("Space", "Variant"), "Slug")})
+	}
 	add("Space", "Component → Variant", path("Space", "Component", "Variant"))
 	add("Space", "Layer → Component → Variant", path("Space", "Layer", "Component", "Variant"))
 	add("Space", "Environment → Region → Cluster", path("Space", "Environment", "Region", "Cluster"))

@@ -16,22 +16,22 @@ func TestGolden(t *testing.T) {
 		{
 			"SELECT Slug, Space.Slug FROM Unit IN * WHERE Labels.Environment = 'prod'", "",
 			`cub unit list --space '*' --where "Labels.Environment = 'prod'" --columns Unit.Slug,Space.Slug`,
-			`GET /api/unit?include=BridgeWorkerID%2CChangeSetID%2CFromLinkID%2CSpaceID%2CTargetID%2CUnitEventID%2CUpstreamUnitID&select=BridgeWorker.Slug%2CBridgeWorkerID%2CChangeSet.Slug%2CChangeSetID%2CFromLink.Slug%2CFromLinkID%2CSlug%2CSpace.Slug%2CSpaceID%2CTarget.Slug%2CTargetID%2CUnitID%2CUpstreamUnit.Slug%2CUpstreamUnitID&where=Labels.Environment+%3D+%27prod%27`,
+			`GET /api/unit?include=ChangeSetID%2CFromLinkID%2CSpaceID%2CTargetID%2CUnitEventID%2CUpstreamUnitID&select=ChangeSet.Slug%2CChangeSetID%2CFromLink.Slug%2CFromLinkID%2CSlug%2CSpace.Slug%2CSpaceID%2CTarget.Slug%2CTargetID%2CUnitID%2CUpstreamUnit.Slug%2CUpstreamUnitID&where=Labels.Environment+%3D+%27prod%27`,
 		},
 		{
 			"SELECT Slug, Target.Slug, HeadRevisionNum FROM Unit", "prod-eu",
 			`cub unit list --space prod-eu --columns Unit.Slug,Target.Slug,Unit.HeadRevisionNum`,
-			`GET /api/space/{prod-eu}/unit?include=BridgeWorkerID%2CChangeSetID%2CFromLinkID%2CSpaceID%2CTargetID%2CUnitEventID%2CUpstreamUnitID&select=BridgeWorker.Slug%2CBridgeWorkerID%2CChangeSet.Slug%2CChangeSetID%2CFromLink.Slug%2CFromLinkID%2CHeadRevisionNum%2CSlug%2CSpace.Slug%2CSpaceID%2CTarget.Slug%2CTargetID%2CUnitID%2CUpstreamUnit.Slug%2CUpstreamUnitID`,
+			`GET /api/space/{prod-eu}/unit?include=ChangeSetID%2CFromLinkID%2CSpaceID%2CTargetID%2CUnitEventID%2CUpstreamUnitID&select=ChangeSet.Slug%2CChangeSetID%2CFromLink.Slug%2CFromLinkID%2CHeadRevisionNum%2CSlug%2CSpace.Slug%2CSpaceID%2CTarget.Slug%2CTargetID%2CUnitID%2CUpstreamUnit.Slug%2CUpstreamUnitID`,
 		},
 		{
 			"SELECT Slug, Labels.Environment FROM Space WHERE Labels.Component = 'checkout'", "prod-eu",
 			`cub space list --where "Labels.Component = 'checkout'" --columns Space.Slug,Space.Labels.Environment`,
-			`GET /api/space?select=Labels%2CSlug%2CSpaceID&where=Labels.Component+%3D+%27checkout%27`,
+			`GET /api/space?include=ComponentID&select=Component.Slug%2CComponentID%2CLabels%2CSlug%2CSpaceID&where=Labels.Component+%3D+%27checkout%27`,
 		},
 		{
 			"SELECT Slug FROM Unit IN * WHERE UpstreamRevisionNum > 0 AND UpstreamRevisionNum < UpstreamUnit.HeadRevisionNum", "",
 			`cub unit list --space '*' --where "UpstreamRevisionNum > 0 AND UpstreamRevisionNum < UpstreamUnit.HeadRevisionNum" --columns Unit.Slug`,
-			`GET /api/unit?include=BridgeWorkerID%2CChangeSetID%2CFromLinkID%2CSpaceID%2CTargetID%2CUnitEventID%2CUpstreamUnitID&select=BridgeWorker.Slug%2CBridgeWorkerID%2CChangeSet.Slug%2CChangeSetID%2CFromLink.Slug%2CFromLinkID%2CSlug%2CSpace.Slug%2CSpaceID%2CTarget.Slug%2CTargetID%2CUnitID%2CUpstreamUnit.Slug%2CUpstreamUnitID&where=UpstreamRevisionNum+%3E+0+AND+UpstreamRevisionNum+%3C+UpstreamUnit.HeadRevisionNum`,
+			`GET /api/unit?include=ChangeSetID%2CFromLinkID%2CSpaceID%2CTargetID%2CUnitEventID%2CUpstreamUnitID&select=ChangeSet.Slug%2CChangeSetID%2CFromLink.Slug%2CFromLinkID%2CSlug%2CSpace.Slug%2CSpaceID%2CTarget.Slug%2CTargetID%2CUnitID%2CUpstreamUnit.Slug%2CUpstreamUnitID&where=UpstreamRevisionNum+%3E+0+AND+UpstreamRevisionNum+%3C+UpstreamUnit.HeadRevisionNum`,
 		},
 		{
 			"SELECT Slug, Space.Slug, FromUnit.Slug FROM Link IN *", "",

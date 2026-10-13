@@ -77,6 +77,9 @@ One `Model` (`app.go`) with:
 - `go test ./...` is offline. `stubRunner`, `stubResources`, `stubSpaces`, `stubDiff`,
   `fakeResources`, `liveWith` (in `internal/tui/*_test.go`) stand in for the server. `press`,
   `typeText`, `runCmd` drive the model; `runCmd` flattens `tea.BatchMsg` and skips ticks.
+- `changeorder.workflowSlugs` is a **process-wide** cache and Go runs test files in
+  alphabetical order, so a test that asserts a request count must `workflowSlugs.Delete(id)`
+  first or it inherits whatever an earlier file already fetched.
 - Golden tests in `internal/plan/plan_test.go` pin statement → cub command → API request.
   When selects change on purpose, regenerate the expectations from the test's `got` output.
 - Live smoke test under a pty when the model test cannot prove something:
@@ -93,6 +96,19 @@ One `Model` (`app.go`) with:
 - A list statement's `select` trims the row to what the plan names; anything a reading needs
   beyond the columns (the change order's `ChangeWorkflow`, `Promotions`, …) must be in
   `plan.changeOrderFields`, or it arrives empty and reads as absent.
+
+## Checking a reading against the CLI
+
+The `cub` CLI is the reference for every reading here, so most debugging is "ask the server the
+same question two ways". Three things cost an afternoon each if you don't know them:
+
+- `cub api GET "path?where=…"` returns **400** once the URL contains spaces or quotes. Pass
+  each parameter separately: `cub api GET path --query where="Slug = 'x'"`. `cub api POST
+  promote --data body.json` works, with the body in a file.
+- `cub <entity> get -o json` wraps the entity in an envelope — a change order arrives as
+  `{ChangeOrder, Space, StartTag, EndTag}`, so `jq '.Stage'` is null. Every `get` does this.
+- `SpaceSlug = '…'` is not a where attribute and the server rejects it; the join prefix
+  `Space.Slug = '…'` is what works.
 
 ## Loop
 

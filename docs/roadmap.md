@@ -20,6 +20,13 @@ of truth; update it when state changes. Design: `design.md`.
 | P2b | Change orders | Design in `change-orders.md`: ChangeOrder list preset with state/stage/next/blocker columns, change order mode (stage strip, per-space taken/released/healthy, gates in CLI wording), source and per-space diffs from the change order's tags (semantic), dry-run preview per stage, `P` promote / `L` release / `B` both behind a confirm overlay. | R1–R3 released as v0.2.0 (2026-09-05), chapter 1 verified live through test; R4 polish and R5 gated items in `change-orders.md` |
 | P2 | Write phase design | `UPDATE`/`DELETE`/`CALL … WHERE` with live dry-run preview, changesets as transactions. Separate design doc. | gated on phase 1 |
 
+Known bugs, open and unclaimed:
+
+- Zero-valued numbers render blank. The server omits them from the JSON, so the grid cannot
+  tell absent from `0`; fixing it properly needs the M4 schema types to supply the zero value.
+- `Space.Slug = 'x'` is not rewritten to `SpaceID`, so it filters locally instead of being
+  pushed to the server.
+
 Product asks raised by the lab, to file as issues when they bite:
 
 - `GET /api/schema/queryable` (attributes, types, joins, computed) so clients can complete and validate.

@@ -433,11 +433,14 @@ from upstream -- through upgrades, merges and the links that resolve values -- t
 was set. FLAGS says in one letter each what else there is to know (protected, guarded, a
 dropped upstream change, a link finding, a validating trigger's failed check that names the
 field -- an error, which blocks a release, or a warning -- upgrade, link, trigger, change
-order, not released), with the legend under the list. A resource's tab lists only its own fields.
+order, not released, and in lowercase, since they are informational, needed or provided
+through a NeedsProvides link), with the legend under the list. A resource's tab lists only its
+own fields.
 
 `↑`/`↓` choose a field. `Enter` shows everything recorded about it, as `cub unit path` does:
 its value, whether it is released, protection, guards, conflicts, findings and failed checks
-with what each said, and each change
+with what each said, the attributes it is needed or provided as, with the link that bound a
+needed one, and each change
 from this unit out to where the value was set, with the link, function, operation, user,
 change orders, releases and tags of each. `h` does the same and adds every change the unit
 recorded to the field, oldest first, which reads the record of every revision of the unit.

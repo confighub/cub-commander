@@ -267,10 +267,10 @@ func renderPathReport(r *blame.PathReport) string {
 		line(0, kind, blame.FormatGuards(r.Annotations[kind]))
 	}
 	for _, attribute := range r.Needed {
-		line(0, "Needed", attribute.AttributeName)
+		line(0, "Needed", blame.FormatNeeded(attribute))
 	}
 	for _, attribute := range r.Provided {
-		line(0, "Provided", attribute.AttributeName)
+		line(0, "Provided", blame.FormatProvided(attribute))
 	}
 	for _, conflict := range r.Conflicts {
 		text := conflict.Reason

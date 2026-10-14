@@ -6,8 +6,8 @@ require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/confighub/sdk/core v0.8.17
-	github.com/confighub/sdk/cubutil v0.8.17
+	github.com/confighub/sdk/core v0.8.18
+	github.com/confighub/sdk/cubutil v0.8.18
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
@@ -32,14 +32,14 @@ require (
 	github.com/cockroachdb/errors v1.11.3 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/redact v1.1.5 // indirect
-	github.com/confighub/sdk/configkit/appyamlkit v0.8.17 // indirect
-	github.com/confighub/sdk/configkit/envkit v0.8.17 // indirect
-	github.com/confighub/sdk/configkit/inikit v0.8.17 // indirect
-	github.com/confighub/sdk/configkit/jsonkit v0.8.17 // indirect
-	github.com/confighub/sdk/configkit/k8skit v0.8.17 // indirect
-	github.com/confighub/sdk/configkit/propkit v0.8.17 // indirect
-	github.com/confighub/sdk/configkit/textkit v0.8.17 // indirect
-	github.com/confighub/sdk/configkit/tomlkit v0.8.17 // indirect
+	github.com/confighub/sdk/configkit/appyamlkit v0.8.18 // indirect
+	github.com/confighub/sdk/configkit/envkit v0.8.18 // indirect
+	github.com/confighub/sdk/configkit/inikit v0.8.18 // indirect
+	github.com/confighub/sdk/configkit/jsonkit v0.8.18 // indirect
+	github.com/confighub/sdk/configkit/k8skit v0.8.18 // indirect
+	github.com/confighub/sdk/configkit/propkit v0.8.18 // indirect
+	github.com/confighub/sdk/configkit/textkit v0.8.18 // indirect
+	github.com/confighub/sdk/configkit/tomlkit v0.8.18 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/getsentry/sentry-go v0.27.0 // indirect
 	github.com/go-errors/errors v1.5.1 // indirect

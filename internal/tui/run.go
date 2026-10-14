@@ -7,6 +7,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/confighub/sdk/core/cubapi"
+	"github.com/confighub/sdk/cubutil/blame"
+
 	"github.com/confighub/cub-commander/internal/catalog"
 	"github.com/confighub/cub-commander/internal/changeorder"
 	"github.com/confighub/cub-commander/internal/cubclient"
@@ -38,6 +41,11 @@ func Run(sess plan.Session) error {
 	}
 	m.revDataLoader = func(ctx context.Context, row cubclient.Row, id string) (string, error) {
 		return revisionData(ctx, client, row, id)
+	}
+	if sdk, err := cubapi.NewClientFromEnvironment(context.Background(), cubapi.ClientOptions{UserAgent: "cub-commander"}); err == nil {
+		m.blameLoader = func(ctx context.Context, row cubclient.Row) (*BlameResult, error) {
+			return blameUnit(ctx, sdk, row)
+		}
 	}
 	m.dataSaver = func(ctx context.Context, row cubclient.Row, text, ifMatch string) (int, error) {
 		return exec.SaveUnitData(ctx, client, row, text, ifMatch, editDescription)
@@ -264,4 +272,29 @@ func cols(h []string) []plan.Col {
 		out[i] = plan.Col{Header: s}
 	}
 	return out
+}
+
+// blameUnit blames the unit behind a row with the SDK's blame package. Each load has a
+// Resolver of its own, so a reload reads afresh, and the field records opened from it share
+// what it has already read.
+func blameUnit(ctx context.Context, client *cubapi.Client, row cubclient.Row) (*BlameResult, error) {
+	id := unitID(row)
+	if id == "" {
+		return nil, fmt.Errorf("the row names no unit")
+	}
+	unit, err := cubapi.ResolveUnit(ctx, client, cubapi.ParseRef(id), cubapi.ResolveOpts{})
+	if err != nil {
+		return nil, err
+	}
+	resolver := blame.NewResolver(client, blame.Options{})
+	fields, err := resolver.Unit(ctx, unit.Unit)
+	if err != nil {
+		return nil, err
+	}
+	return &BlameResult{
+		Fields: fields,
+		Path: func(ctx context.Context, f *blame.Field, history bool) (*blame.PathReport, error) {
+			return resolver.Path(ctx, unit.Unit, f, history)
+		},
+	}, nil
 }

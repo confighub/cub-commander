@@ -16,14 +16,15 @@ import (
 )
 
 // Detail is master/detail for one row: a Metadata tab (the extended row)
-// and, for units, a Data tab holding the configuration. `e` on Data opens
+// and, for units and resources, a Data tab holding the configuration and a
+// Blame tab saying what set each field of it (blame.go). `e` on Data opens
 // $EDITOR and saves the result as a new revision, conditional on the hash
 // the data was read at; a conflict keeps your buffer for the next `e`.
 
 type detailState struct {
 	row     cubclient.Row
 	entity  string
-	tab     int    // 0 metadata, 1 data
+	tab     int    // 0 metadata, 1 data, 2 blame
 	data    string // the text shown and edited: the unit's data, or one resource's document
 	hash    string // the unit's DataHash the data was read at
 	loaded  bool
@@ -31,6 +32,7 @@ type detailState struct {
 	draft   string // your last edit when the save conflicted
 	from    mode   // where Esc returns
 	picker  *revPicker
+	blame   *blameState
 
 	// For a Resource: the unit that owns it and the document it is.
 	unitRow  cubclient.Row
@@ -108,6 +110,18 @@ func (m *Model) renderDetail() {
 	}
 	var body string
 	switch m.det.tab {
+	case blameTab:
+		// The list keeps the chosen field in view rather than starting from the top.
+		body, line := m.blameBody(m.mainWidth())
+		m.detail.SetContent(body)
+		height := max(m.detail.Height(), 1)
+		switch {
+		case line < m.detail.YOffset():
+			m.detail.SetYOffset(line)
+		case line >= m.detail.YOffset()+height:
+			m.detail.SetYOffset(line - height + 1)
+		}
+		return
 	case 1:
 		switch {
 		case m.det.loaded:
@@ -180,6 +194,11 @@ func (m Model) detailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if d.picker != nil {
 		return m.pickerKey(k)
 	}
+	if d.tab == blameTab {
+		if mm, cmd, ok := m.blameKey(k); ok {
+			return mm, cmd
+		}
+	}
 	switch k.String() {
 	case "d":
 		if d.entity != "Unit" {
@@ -192,18 +211,16 @@ func (m Model) detailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.pivotRow("d", d.row, d.entity)
-	case "1", "[", "left":
-		d.tab = 0
-		m.renderDetail()
-		return m, nil
-	case "2", "]", "right", "tab":
-		if d.editable() {
-			d.tab = 1
-			m.renderDetail()
-			return m, m.detailLoad()
-		}
-		m.setStatus(fmt.Sprintf("a %s has only Metadata; open a unit or a resource for its Data", d.entity), true)
-		return m, nil
+	case "1":
+		return m.detailTab(0)
+	case "2":
+		return m.detailTab(1)
+	case "3":
+		return m.detailTab(blameTab)
+	case "]", "right", "tab":
+		return m.detailTab(d.tab + 1)
+	case "[", "left":
+		return m.detailTab(max(d.tab-1, 0))
 	case "e":
 		if !d.editable() {
 			m.setStatus("only unit and resource data is editable", true)
@@ -219,6 +236,11 @@ func (m Model) detailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.editData()
 	case "R", "shift+r":
+		if d.tab == blameTab {
+			d.blame = nil
+			m.renderDetail()
+			return m, m.blameLoad()
+		}
 		d.loaded, d.loading = false, false
 		m.renderDetail()
 		return m, m.detailLoad()
@@ -236,6 +258,26 @@ func (m Model) detailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.detail, cmd = m.detail.Update(k)
 	return m, cmd
+}
+
+// detailTab switches to a tab, loading what it shows. A row with no data has only Metadata.
+func (m Model) detailTab(tab int) (tea.Model, tea.Cmd) {
+	d := m.det
+	if tab == 0 {
+		d.tab = 0
+		m.renderDetail()
+		return m, nil
+	}
+	if !d.editable() {
+		m.setStatus(fmt.Sprintf("a %s has only Metadata; open a unit or a resource for its Data and Blame", d.entity), true)
+		return m, nil
+	}
+	d.tab = min(tab, blameTab)
+	m.renderDetail()
+	if d.tab == blameTab {
+		return m, m.blameLoad()
+	}
+	return m, m.detailLoad()
 }
 
 // editData writes the data (or the draft from a conflicted save) to a temp
@@ -357,7 +399,7 @@ func (m Model) detailView() string {
 	}
 	tabs := []string{"Metadata"}
 	if d.editable() {
-		tabs = append(tabs, "Data")
+		tabs = append(tabs, "Data", "Blame")
 	}
 	var parts []string
 	for i, t := range tabs {
@@ -387,7 +429,9 @@ func (m Model) detailView() string {
 	case !d.editable():
 		extra = dimStyle.Render("  (" + d.entity + ": metadata only)")
 	case d.tab == 0:
-		extra = dimStyle.Render("  2 or → for Data · d diff revisions · s space · r revisions · l links")
+		extra = dimStyle.Render("  2 or → for Data · 3 Blame · d diff revisions · s space · r revisions · l links")
+	case d.tab == blameTab:
+		extra = dimStyle.Render("  ↑↓ field · ⏎ its record · h with every change to it · R reload")
 	}
 	head := lipgloss.NewStyle().MaxWidth(w).Render(titleStyle.Render(" "+name) + "  " + strings.Join(parts, " ") + extra)
 	if d.picker != nil {

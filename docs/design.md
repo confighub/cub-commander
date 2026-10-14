@@ -421,6 +421,31 @@ revisions, `m` mutations, `l` links, `k` component (all variants), `v` live data
 slug, `Y` yank the row as JSON, `Enter` open Detail, `Esc` back (statement history is the
 breadcrumb). `^X` shows the plan and the equivalent `cub` command.
 
+### 5.4.1 Detail tabs
+
+A unit's detail, and a resource's, has three tabs: `1` Metadata (the extended row), `2` Data
+(the configuration; §9's one write starts here) and `3` Blame. `→`/`←` move between them.
+
+Blame is `cub unit blame` as a list: one line per field, grouped by resource, saying what set
+the value there (the link, trigger or function, or the operation that made the revision),
+who, in which space, at which revision and how long ago, after following a value that arrived
+from upstream -- through upgrades, merges and the links that resolve values -- to where it
+was set. FLAGS says in one letter each what else there is to know (protected, guarded, a
+dropped upstream change, a link finding, a validating trigger's failed check that names the
+field -- an error, which blocks a release, or a warning -- upgrade, link, trigger, change
+order, not released), with the legend under the list. A resource's tab lists only its own fields.
+
+`↑`/`↓` choose a field. `Enter` shows everything recorded about it, as `cub unit path` does:
+its value, whether it is released, protection, guards, conflicts, findings and failed checks
+with what each said, and each change
+from this unit out to where the value was set, with the link, function, operation, user,
+change orders, releases and tags of each. `h` does the same and adds every change the unit
+recorded to the field, oldest first, which reads the record of every revision of the unit.
+`Esc` returns to the list with the field still chosen; `R` reads the blame again.
+
+The reading is the SDK's (`github.com/confighub/sdk/cubutil/blame`), so the tab and the CLI
+cannot disagree about who set a field; the tab only renders it.
+
 ### 5.5 The ramp: from navigating to writing
 
 *Added 2026-09-03 after the first sessions with M2: an empty editor is the power path

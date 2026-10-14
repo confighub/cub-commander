@@ -92,6 +92,7 @@ type Model struct {
 	// detail
 	det           *detailState
 	dataLoader    DataLoader
+	blameLoader   BlameLoader
 	dataSaver     DataSaver
 	revLoader     RevLoader
 	revDataLoader RevDataLoader
@@ -228,6 +229,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case unitDataMsg:
 		m.dataLoaded(msg)
+		return m, nil
+	case blameMsg:
+		m.blameLoaded(msg)
+		return m, nil
+	case pathMsg:
+		m.pathLoaded(msg)
 		return m, nil
 	case revisionsMsg:
 		m.revisionsLoaded(msg)

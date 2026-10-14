@@ -16,6 +16,7 @@ not written anywhere else. Read this before adding a mode.*
 | `internal/history` | jsonl statement history under `~/.confighub/commander/`. |
 | `internal/changeorder` | A ChangeOrder read with its stages, from what the server says: the ChangeWorkflow copy, Stage, Promotions and Releases on the order; each stage's spaces (`WhereSpace ∩ InScopeSpaceIDs`); taken/released from the per-space sets; healthy from the latest published Release's `LiveStatus`; the next stage and its gates from a `POST /promote` dry run (`derive` only picks the console state); the change per space from `unit_diff` (`ChangeIn`); the preview from the dry run with diffs; promote with `ExpectedPlan`; release for the order. `MemClient` (with a stand-in `/promote`) + `ChapterOne()` are the offline fixture other packages' tests use; `live_test.go` is the opt-in read-only live check. See `change-orders.md`. |
 | `internal/tui` | The Bubble Tea v2 app. See below. |
+| SDK `cubutil/blame` | Not ours: what set each field of a unit, from `github.com/confighub/sdk/cubutil/blame`, read through a `cubapi.Client` built from the plugin's `CUB_*` environment. The Blame tab renders it (`blame.go`, wired in `run.go`). It runs `compute-mutations` locally to flatten a unit's data, which is what brings the SDK's function executor and the `configkit` providers into the binary. |
 | `cmd` | cobra root: `commander` opens the TUI; hidden `-e` runs statements for scripts and tests. |
 
 Modules are `charm.land/bubbletea/v2`, `charm.land/bubbles/v2`, `charm.land/lipgloss/v2` (the
@@ -30,10 +31,12 @@ One `Model` (`app.go`) with:
   `modeChangeOrder` (stage strip + spaces + change; `changeorder.go`, entered by a `changeorder` step).
   The chooser (`chooserOpen`) and help (`helpOpen`) are overlays, not modes.
 - **Focus**: `focusCmd` (the textarea), `focusMain`, `focusDrawer` (history).
-- **Per-mode state**: `browse *browseState`, `det *detailState` (with `picker *revPicker`),
-  `diff *diffState`, `order *changeOrderState` (remembers the statement it was opened from and
-  restores it on Esc). Each mode file owns its state, its `…Key` handler and its `…View`:
-  `browse.go`, `detail.go` + `revisions.go`, `diff.go`, `actions.go` (grid, chips, pivots).
+- **Per-mode state**: `browse *browseState`, `det *detailState` (with `picker *revPicker` and
+  `blame *blameState`), `diff *diffState`, `order *changeOrderState` (remembers the statement it
+  was opened from and restores it on Esc). Each mode file owns its state, its `…Key` handler and
+  its `…View`: `browse.go`, `detail.go` + `revisions.go` + `blame.go` (the Blame tab, which
+  takes ↑↓/Enter/h before the detail's own keys and opens a field's record in the text view, so
+  Esc's text→detail step brings the list back), `diff.go`, `actions.go` (grid, chips, pivots).
 - **Key routing order** (`key()` in `app.go`), which is where most "key does nothing" bugs
   have lived: completion popup → open revision picker → global chords (`^Q ^/ ^G ^O ^R ^X ^B`,
   Esc, ⇧Tab, Tab) → help swallows → drawer → main by mode → command area. A new overlay that
@@ -45,7 +48,8 @@ One `Model` (`app.go`) with:
   Never mutate results in place.
 - **Async work is injected**: `Runner` (statements), `Sampler` (live catalog), `Fetcher`
   (resource panes), `DataFetcher`/`DataLoader`/`DataSaver` (unit data and the one write),
-  `RevLoader`/`RevDataLoader`. `run.go` wires them to the real client; tests pass stubs. A
+  `RevLoader`/`RevDataLoader`, `BlameLoader` (a unit's blame, whose result carries the reader
+  for one field's record, so opening a field reuses what the blame already read). `run.go` wires them to the real client; tests pass stubs. A
   loader returns a `tea.Cmd` producing a typed msg (`resultMsg`, `resourcesMsg`,
   `unitDataMsg`, `savedMsg`, …) handled in `Update`. Match messages on the unit key, never on
   position, because the user may have moved on.

@@ -49,5 +49,8 @@ searches it), a
 results grid (Shift+Tab to focus; `f` filters by the focused cell, `-` drops the last chip, `o`
 orders by the column, Enter opens the row, `s t u d r l` pivot to the row's space, target,
 upstream, downstreams, revisions, links), Ctrl+X for the plan and cub command, Ctrl+/ for
-help, Ctrl+Q to quit. No F-keys.
+help, Ctrl+Q to quit. No F-keys. A unit's or a resource's detail has three tabs: Metadata,
+Data, and Blame, which says what set each field of the configuration, who, where and when,
+following a value from upstream to where it was set; Enter on a field shows everything
+recorded about it, as `cub unit path` does.
 `-e` stays as the scripting and test surface.

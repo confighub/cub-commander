@@ -419,11 +419,14 @@ the highlighted unit once you step into Units. ←→ panes, ↑↓ values, ⏎ 
 the right (the selected unit's resources, then the row's fields, then off), g turns the
 selections into where steps and shows the grid, b returns to the chooser.
 
-Detail (Enter on a row): tabs 1 Metadata · 2 Data (←→ switch). On Data: e opens $EDITOR on the
+Detail (Enter on a row): tabs 1 Metadata · 2 Data · 3 Blame (←→ switch). On Data: e opens $EDITOR on the
 unit's configuration and, when you save and exit, posts it as a new revision, conditional on
 the DataHash you read (If-Match). A conflict reloads the head and keeps your edit for the next
 e. R reloads. A resource opens the same way: its Data tab is its own document, and e edits
 that document; the save writes the unit with the document replaced, under the unit's hash.
+On Blame: what set each field, who, where and when, followed from upstream to where it was
+set (cub unit blame); FLAGS is explained under the list. ↑↓ choose a field, ⏎ shows its
+record (cub unit path), h adds every change to it, Esc returns to the list, R reads it again.
 d lists the unit's revisions: ⏎ diffs the highlighted one against the current
 data, m marks one and ⏎ on another diffs the two; Esc returns to the list, Esc again closes
 it. The pivot keys

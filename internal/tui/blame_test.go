@@ -27,8 +27,9 @@ func (s *stubBlame) loader() BlameLoader {
 		here := &blame.Origin{SpaceSlug: "prod", UnitSlug: "web", RevisionNum: 31, SetBy: "link ui-stable-image",
 			Function: "set-image-reference-by-uri", LinkUpstream: "registry-facts/ui-image", LinkUpstreamRevisionNum: 81, When: when}
 		fields := []*blame.Field{
-			{Ref: "1111111", ResourceType: "apps/v1/Deployment", ResourceName: "prod/web", Path: "spec.replicas", Value: "3",
-				Chain: []*blame.Origin{{SpaceSlug: "prod", UnitSlug: "web", RevisionNum: 4, SetBy: "set-replicas", User: "brian", When: when}}},
+			{Ref: "1111111", ResourceType: "apps/v1/Deployment", ResourceName: "prod/web", Path: "spec.replicas", Value: "3", Flags: "W",
+				Validation: []blame.Validation{{Gate: "prod/replicas/vet-cel", Warning: true, Details: []string{"replicas must be more than 3"}}},
+				Chain:      []*blame.Origin{{SpaceSlug: "prod", UnitSlug: "web", RevisionNum: 4, SetBy: "set-replicas", User: "brian", When: when}}},
 			{Ref: "2222222", ResourceType: "apps/v1/Deployment", ResourceName: "prod/web", Path: "spec.template.spec.containers.?name=web.image",
 				Value: "ghcr.io/web:v1", Flags: "PL", Chain: []*blame.Origin{here, upstream}},
 			{Ref: "3333333", ResourceType: "v1/Service", ResourceName: "prod/web", Path: "spec.type", Value: "ClusterIP"},
@@ -102,7 +103,7 @@ func TestBlameTabListsFields(t *testing.T) {
 	}
 	v := m.View().Content
 	for _, want := range []string{"apps/v1/Deployment prod/web", "v1/Service prod/web", "spec.replicas", "set-replicas",
-		"UpdateUnit", "registry-facts", "registrybot", "P  protected"} {
+		"UpdateUnit", "registry-facts", "registrybot", "P  protected", "W  validation warning"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("Blame tab lacks %q:\n%s", want, v)
 		}
@@ -186,5 +187,16 @@ func TestBlameNeedsData(t *testing.T) {
 	m = update(mm, keyMsg("3"))
 	if m.(Model).det.tab != 0 || stub.loads != 0 {
 		t.Fatalf("tab=%d loads=%d", m.(Model).det.tab, stub.loads)
+	}
+}
+
+// The record of a field a validating Trigger failed says which check and what it found.
+func TestBlameRecordShowsFailedChecks(t *testing.T) {
+	stub := &stubBlame{}
+	m := blameModel(t, stub, unitRow())
+	m = update(m, keyMsg("3"))
+	m = update(m, keyMsg("enter"))
+	if v := m.View().Content; !strings.Contains(v, "Validation:") || !strings.Contains(v, "warning prod/replicas/vet-cel: replicas must be more than 3") {
+		t.Fatalf("the record lacks the failed check:\n%s", v)
 	}
 }

@@ -279,6 +279,9 @@ func renderPathReport(r *blame.PathReport) string {
 		}
 		line(0, "Conflict", text)
 	}
+	for _, validation := range r.Validation {
+		line(0, "Validation", blame.FormatValidation(validation))
+	}
 	for _, finding := range r.Findings {
 		line(0, "Finding", strings.TrimSpace(finding.Reason+" "+finding.Details))
 	}

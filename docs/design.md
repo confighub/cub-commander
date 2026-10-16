@@ -154,9 +154,8 @@ ops-home/by-target | where Labels.Region = 'us-east'
 
 - The entity comes first because it is what you chose first when navigating. Scope is the
   session's `USE` space; `in <space>` overrides it per statement. The default is org-wide
-  (`USE *`, matching `--space '*'`), deliberately unlike `cub`, which defaults to the
-  context's space: in a lab the space is a join column, and a query that silently returns
-  three rows out of a hundred and fifty is the wrong surprise. The status line names the
+  (`USE *`, matching `cub` without `--space`): in a lab the space is a join column, and a
+  query that silently returns three rows out of a hundred and fifty is the wrong surprise. The status line names the
   scope with every result.
 - **Step order is plan order.** The leading run of `where` steps that fit the server grammar
   (a conjunction of attribute terms) goes to the server as one where clause. From the first
@@ -244,9 +243,9 @@ EXPLAIN Unit | where Space.Slug = 'prod-eu' | columns Slug, get-replicas() as r 
 ```
 ```
 plan
-  1. list Unit            cub unit list --space '*' --where "SpaceID = 'c1f2…'" --columns Unit.Slug
+  1. list Unit            cub unit list --where "SpaceID = 'c1f2…'" --columns Unit.Slug
                           (rewrote Space.Slug = 'prod-eu' → SpaceID, pushed to SQL)
-  2. function get-replicas cub function get --space '*' --where "SpaceID = 'c1f2…'" get-replicas --show output -o json
+  2. function get-replicas cub function get --where "SpaceID = 'c1f2…'" get-replicas --show output -o json
   3. join on UnitID       local
   4. where r > 3          local   (r is a column alias, not a server attribute)
 ```
@@ -503,7 +502,7 @@ until decided; it is the one decision that shapes M3.
 *Decided 2026-09-03: the pipeline form (§4.1) is canonical and is what the tool writes; SQL
 SELECT is accepted and printed back as a pipeline.* The earlier reasoning, kept for the record: The command area must accept the dialect in
 §4 because that is what the UI writes. It should *also* accept a `cub` list command verbatim
-(`cub unit list --space '*' --where "…" --columns …`, `cub` optional) and translate it into the
+(`cub unit list --where "…" --columns …`, `cub` optional) and translate it into the
 same plan, so someone who already knows `cub` has a ramp and can see the translation. Terse
 forms (`unit where Labels.env='prod'`) are tempting but a third syntax is a mistake; if the
 SQL keywords feel heavy in practice, the fix is to let `SELECT` and `FROM` be optional

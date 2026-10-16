@@ -15,7 +15,7 @@ func TestGolden(t *testing.T) {
 	}{
 		{
 			"SELECT Slug, Space.Slug FROM Unit IN * WHERE Labels.Environment = 'prod'", "",
-			`cub unit list --space '*' --where "Labels.Environment = 'prod'" --columns Unit.Slug,Space.Slug`,
+			`cub unit list --where "Labels.Environment = 'prod'" --columns Unit.Slug,Space.Slug`,
 			`GET /api/unit?include=ChangeSetID%2CFromLinkID%2CSpaceID%2CTargetID%2CUnitEventID%2CUpstreamUnitID&select=ChangeSet.Slug%2CChangeSetID%2CFromLink.Slug%2CFromLinkID%2CSlug%2CSpace.Slug%2CSpaceID%2CTarget.Slug%2CTargetID%2CUnitID%2CUpstreamUnit.Slug%2CUpstreamUnitID&where=Labels.Environment+%3D+%27prod%27`,
 		},
 		{
@@ -30,12 +30,12 @@ func TestGolden(t *testing.T) {
 		},
 		{
 			"SELECT Slug FROM Unit IN * WHERE UpstreamRevisionNum > 0 AND UpstreamRevisionNum < UpstreamUnit.HeadRevisionNum", "",
-			`cub unit list --space '*' --where "UpstreamRevisionNum > 0 AND UpstreamRevisionNum < UpstreamUnit.HeadRevisionNum" --columns Unit.Slug`,
+			`cub unit list --where "UpstreamRevisionNum > 0 AND UpstreamRevisionNum < UpstreamUnit.HeadRevisionNum" --columns Unit.Slug`,
 			`GET /api/unit?include=ChangeSetID%2CFromLinkID%2CSpaceID%2CTargetID%2CUnitEventID%2CUpstreamUnitID&select=ChangeSet.Slug%2CChangeSetID%2CFromLink.Slug%2CFromLinkID%2CSlug%2CSpace.Slug%2CSpaceID%2CTarget.Slug%2CTargetID%2CUnitID%2CUpstreamUnit.Slug%2CUpstreamUnitID&where=UpstreamRevisionNum+%3E+0+AND+UpstreamRevisionNum+%3C+UpstreamUnit.HeadRevisionNum`,
 		},
 		{
 			"SELECT Slug, Space.Slug, FromUnit.Slug FROM Link IN *", "",
-			`cub link list --space '*' --columns Link.Slug,Space.Slug,FromUnit.Slug`,
+			`cub link list --columns Link.Slug,Space.Slug,FromUnit.Slug`,
 			`GET /api/link?include=FromUnitID%2CSpaceID%2CToSpaceID%2CToUnitID&select=FromUnit.Slug%2CFromUnitID%2CLinkID%2CSlug%2CSpace.Slug%2CSpaceID%2CToSpace.Slug%2CToSpaceID%2CToUnit.Slug%2CToUnitID`,
 		},
 	}

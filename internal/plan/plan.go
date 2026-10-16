@@ -502,12 +502,9 @@ func header(ent catalog.Entity, path string) string {
 func (p *Plan) CubCommand() string {
 	var b strings.Builder
 	b.WriteString("cub " + p.Entity.CLI + " list")
-	if p.Entity.SpaceScoped {
-		if p.List.Space == "" {
-			b.WriteString(" --space '*'")
-		} else {
-			b.WriteString(" --space " + p.List.Space)
-		}
+	// Without --space, cub lists across the organization.
+	if p.Entity.SpaceScoped && p.List.Space != "" {
+		b.WriteString(" --space " + p.List.Space)
 	}
 	if p.List.Where != "" {
 		b.WriteString(fmt.Sprintf(" --where %q", p.List.Where))

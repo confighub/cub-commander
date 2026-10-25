@@ -10,8 +10,8 @@ package catalog
 import "strings"
 
 type Entity struct {
-	Name        string   // PascalCase as in the API: Unit, Space, BridgeWorker
-	CLI         string   // cub command group: unit, space, worker
+	Name        string   // PascalCase as in the API: Unit, Space, ChangeSet
+	CLI         string   // cub command group: unit, space, changeset
 	OrgPath     string   // org-wide list path under /api
 	SpaceScoped bool     // has a /space/{id}/... form
 	SpacePath   string   // path segment under /space/{id}/
@@ -67,12 +67,12 @@ var entities = []Entity{
 		DefaultCols: []string{"Slug", "Space.Slug", "ChangeSet.Slug", "CreatedAt"},
 		IDField:     "TagID"},
 	{Name: "Trigger", CLI: "trigger", OrgPath: "/trigger", SpaceScoped: true, SpacePath: "trigger",
-		Joins:       []string{"Organization", "Space", "BridgeWorker", "Invocation", "UnitFilter"},
-		IncludeIDs:  []string{"SpaceID", "BridgeWorkerID", "InvocationID"},
+		Joins:       []string{"Organization", "Space", "Invocation", "UnitFilter"},
+		IncludeIDs:  []string{"SpaceID", "InvocationID"},
 		DefaultCols: []string{"Slug", "Space.Slug", "Event", "ToolchainType", "FunctionName", "Disabled"},
 		IDField:     "TriggerID"},
 	{Name: "Invocation", CLI: "invocation", OrgPath: "/invocation", SpaceScoped: true, SpacePath: "invocation",
-		Joins:       []string{"Organization", "Space", "BridgeWorker"},
+		Joins:       []string{"Organization", "Space"},
 		IncludeIDs:  []string{"SpaceID"},
 		DefaultCols: []string{"Slug", "Space.Slug", "ToolchainType"},
 		IDField:     "InvocationID"},
@@ -101,11 +101,6 @@ var entities = []Entity{
 		IncludeIDs:  []string{"SpaceID", "TagID"},
 		DefaultCols: []string{"ReleaseNum", "Space.Slug", "Tag.Slug", "UnitCount", "Published", "CreatedAt"},
 		IDField:     "ReleaseID"},
-	{Name: "BridgeWorker", CLI: "worker", OrgPath: "/bridge_worker", SpaceScoped: true, SpacePath: "bridge_worker",
-		Joins:       []string{"Organization", "Space"},
-		IncludeIDs:  []string{"SpaceID"},
-		DefaultCols: []string{"Slug", "Space.Slug", "Condition", "LastSeenAt"},
-		IDField:     "BridgeWorkerID"},
 	{Name: "Attribute", CLI: "attribute", OrgPath: "/attribute", SpaceScoped: true, SpacePath: "attribute",
 		Joins:       []string{"Organization", "Space"},
 		IncludeIDs:  []string{"SpaceID"},
@@ -144,7 +139,7 @@ var entities = []Entity{
 }
 
 var aliases = map[string]string{
-	"worker": "BridgeWorker", "workers": "BridgeWorker", "units": "Unit", "spaces": "Space", "targets": "Target",
+	"units": "Unit", "spaces": "Space", "targets": "Target",
 	"revisions": "Revision", "links": "Link", "filters": "Filter", "views": "View", "tags": "Tag", "triggers": "Trigger",
 	"changesets": "ChangeSet", "changeorders": "ChangeOrder", "releases": "Release", "users": "User",
 	"components": "Component", "workflow": "ChangeWorkflow", "workflows": "ChangeWorkflow", "changeworkflows": "ChangeWorkflow",

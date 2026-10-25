@@ -566,7 +566,7 @@ catalog probe test that runs against a real hub and fails when the join table dr
 In: the TUI (command area, history, results, detail, browse in columns and tree form,
 chips, pivots, catalog, save-as-view); SELECT and BROWSE over every entity with `--where` in
 the CLI (unit, space, target, link, revision, mutation, changeset, tag, trigger, invocation,
-filter, view, worker, unit-event, unit-action, user); saved Views and Filters as sources and
+filter, view, unit-event, unit-action, user); saved Views and Filters as sources and
 as save targets; function columns for get and vet functions; HAVING and local aggregates;
 SHOW/DESCRIBE/EXPLAIN; DIFF in all five forms.
 

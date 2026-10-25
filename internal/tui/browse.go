@@ -205,8 +205,6 @@ func (m *Model) previewLines(panes [][]paneItem, width int) (string, []string) {
 // plural names the entity pane after what it holds.
 func plural(entity string) string {
 	switch entity {
-	case "BridgeWorker":
-		return "Workers"
 	case "UnitEvent", "UnitAction", "ChangeSet", "ChangeOrder", "Release":
 		return entity + "s"
 	}

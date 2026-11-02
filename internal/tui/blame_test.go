@@ -27,21 +27,21 @@ func (s *stubBlame) loader() BlameLoader {
 		here := &blame.Origin{SpaceSlug: "prod", UnitSlug: "web", RevisionNum: 31, SetBy: "link ui-stable-image",
 			Function: "set-image-reference-by-uri", LinkUpstream: "registry-facts/ui-image", LinkUpstreamRevisionNum: 81, When: when}
 		fields := []*blame.Field{
-			{Ref: "1111111", ResourceType: "apps/v1/Deployment", ResourceName: "prod/web", Path: "spec.replicas", Value: "3", Flags: "W",
+			{Ref: "1111111", ResourceType: "apps/v1/Deployment", ResourceName: "prod/web", Path: "spec.replicas", Value: "3", Flags: []string{"ValidationWarning"},
 				Validation: []blame.Validation{{Gate: "prod/replicas/vet-cel", Warning: true, Details: []string{"replicas must be more than 3"}}},
-				Chain:      []*blame.Origin{{SpaceSlug: "prod", UnitSlug: "web", RevisionNum: 4, SetBy: "set-replicas", User: "brian", When: when}}},
+				Chain:      []blame.Origin{{SpaceSlug: "prod", UnitSlug: "web", RevisionNum: 4, SetBy: "set-replicas", User: "brian", When: when}}},
 			{Ref: "2222222", ResourceType: "apps/v1/Deployment", ResourceName: "prod/web", Path: "spec.template.spec.containers.?name=web.image",
-				Value: "ghcr.io/web:v1", Flags: "PL", Chain: []*blame.Origin{here, upstream}},
+				Value: "ghcr.io/web:v1", Flags: []string{"Protected", "SetByLink"}, Chain: []blame.Origin{*here, *upstream}},
 			{Ref: "3333333", ResourceType: "v1/Service", ResourceName: "prod/web", Path: "spec.type", Value: "ClusterIP"},
-			{Ref: "4444444", ResourceType: "v1/Service", ResourceName: "prod/web", Path: "spec.$comment$head$type", Value: "a comment"},
 		}
 		return &BlameResult{
 			Fields: fields,
 			Path: func(ctx context.Context, f *blame.Field, history bool) (*blame.PathReport, error) {
 				s.path, s.history = f.Path, history
-				report := &blame.PathReport{Field: f, Released: "yes: the unit's last release is of revision 31"}
-				for _, origin := range f.Chain {
-					report.Changes = append(report.Changes, blame.PathChange{Origin: origin})
+				report := &blame.PathReport{Field: f, ReleaseState: "Released",
+					ReleaseMessage: "yes: the unit's last release is of revision 31"}
+				for i := range f.Chain {
+					report.Changes = append(report.Changes, blame.PathChange{Origin: &f.Chain[i]})
 				}
 				if history {
 					report.History = []blame.PathChange{{Origin: here, MutationType: "Update", Value: "ghcr.io/web:v1"}}
@@ -90,7 +90,7 @@ func unitRow() cubclient.Row {
 }
 
 // 3 opens the Blame tab: one line per field, grouped by resource, with what set it after
-// following it upstream, and the legend for the flags that appear. Comment fields are left out.
+// following it upstream, and the legend for the flags that appear, as letters.
 func TestBlameTabListsFields(t *testing.T) {
 	stub := &stubBlame{}
 	m := blameModel(t, stub, unitRow())
@@ -108,8 +108,8 @@ func TestBlameTabListsFields(t *testing.T) {
 			t.Errorf("Blame tab lacks %q:\n%s", want, v)
 		}
 	}
-	if strings.Contains(v, "$comment$") {
-		t.Errorf("a comment field is listed:\n%s", v)
+	if !strings.Contains(v, "PL") {
+		t.Errorf("the flag codes are not shown as letters:\n%s", v)
 	}
 
 	// Switching away and back does not read it again; R does.

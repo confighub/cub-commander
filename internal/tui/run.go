@@ -274,27 +274,28 @@ func cols(h []string) []plan.Col {
 	return out
 }
 
-// blameUnit blames the unit behind a row with the SDK's blame package. Each load has a
-// Resolver of its own, so a reload reads afresh, and the field records opened from it share
-// what it has already read.
+// blameUnit asks the server for the blame of the unit behind a row, through the SDK's blame
+// package, and returns how to ask for one field's full record.
 func blameUnit(ctx context.Context, client *cubapi.Client, row cubclient.Row) (*BlameResult, error) {
 	id := unitID(row)
 	if id == "" {
 		return nil, fmt.Errorf("the row names no unit")
 	}
-	unit, err := cubapi.ResolveUnit(ctx, client, cubapi.ParseRef(id), cubapi.ResolveOpts{})
+	unit, err := cubapi.ResolveUnit(ctx, client, cubapi.ParseRef(id), cubapi.ResolveOpts{Select: "UnitID,SpaceID,Slug"})
 	if err != nil {
 		return nil, err
 	}
-	resolver := blame.NewResolver(client, blame.Options{})
-	fields, err := resolver.Unit(ctx, unit.Unit)
+	spaceID, unitID := unit.Unit.SpaceID, unit.Unit.UnitID
+	fields, err := blame.Unit(ctx, client, spaceID, unitID, blame.Options{})
 	if err != nil {
 		return nil, err
 	}
 	return &BlameResult{
 		Fields: fields,
 		Path: func(ctx context.Context, f *blame.Field, history bool) (*blame.PathReport, error) {
-			return resolver.Path(ctx, unit.Unit, f, history)
+			// The REF names the field; the resource keeps a prefix collision from naming another.
+			return blame.Path(ctx, client, spaceID, unitID, f.Ref, f.ResourceType+"/"+f.ResourceName, history,
+				blame.Options{})
 		},
 	}, nil
 }

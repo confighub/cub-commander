@@ -445,8 +445,9 @@ change orders, releases and tags of each. `h` does the same and adds every chang
 recorded to the field, oldest first, which reads the record of every revision of the unit.
 `Esc` returns to the list with the field still chosen; `R` reads the blame again.
 
-The reading is the SDK's (`github.com/confighub/sdk/cubutil/blame`), so the tab and the CLI
-cannot disagree about who set a field; the tab only renders it.
+The answer is the server's blame API, read through the SDK (`github.com/confighub/sdk/cubutil/blame`)
+as `cub unit blame` reads it, so the tab and the CLI cannot disagree about who set a field; the
+tab only renders it.
 
 ### 5.5 The ramp: from navigating to writing
 

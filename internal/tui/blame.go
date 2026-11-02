@@ -16,14 +16,14 @@ import (
 // The Blame tab of a unit's (or a resource's) detail: one line per field of the
 // configuration, saying what set the value there, who, where and when -- after following
 // a value that arrived from upstream, through merges and links, to where it was set. It
-// is `cub unit blame`, read through the SDK's blame package rather than reimplemented,
-// so the two cannot disagree. ↑↓ choose a field; Enter shows everything recorded about
+// is `cub unit blame`: the server computes it, and both read it through the SDK's blame
+// package, so the two cannot disagree. ↑↓ choose a field; Enter shows everything recorded about
 // it (`cub unit path`) in the text view, and h does the same with every change the unit
 // recorded to it. Esc returns to the list with the field still chosen.
 
 // BlameResult is a unit's blame: its fields, and how to read one field's full record.
 // Path is a function rather than data because the record is read only when a field is
-// opened, through the same reader the fields came from, which caches what both share.
+// opened, and asked for as the unit and field the list was read for.
 type BlameResult struct {
 	Fields []*blame.Field
 	Path   func(ctx context.Context, f *blame.Field, history bool) (*blame.PathReport, error)
@@ -87,7 +87,8 @@ func (m *Model) blameLoaded(msg blameMsg) {
 		return
 	}
 	d.blame.result = msg.res
-	d.blame.fields = blame.Filter(msg.res.Fields, "", "", false)
+	// The server leaves out the pseudo-fields that hold YAML comments unless asked for them.
+	d.blame.fields = msg.res.Fields
 	if d.entity == "Resource" {
 		d.blame.fields = resourceFields(d.row, d.blame.fields)
 	}
@@ -170,7 +171,11 @@ func (m *Model) pathLoaded(msg pathMsg) {
 		return
 	}
 	m.setStatus("", false)
-	m.showText("Path "+msg.report.Ref, renderPathReport(msg.report))
+	ref := ""
+	if msg.report.Field != nil {
+		ref = msg.report.Field.Ref
+	}
+	m.showText("Path "+ref, renderPathReport(msg.report))
 }
 
 // blameBody renders the field list, grouped by resource, with the chosen field marked, and
@@ -206,13 +211,13 @@ func (m *Model) blameBody(width int) (string, int) {
 			lines = append(lines, focusStyle.Render(key))
 		}
 		setBy, user, where, rev, when := "", "", "", "", ""
-		if o := f.Origin(); o != nil {
+		if o := blame.OriginOf(f); o != nil {
 			setBy, user, where, when = o.SetBy, o.User, o.SpaceSlug, ago(o.When)
 			if o.RevisionNum != 0 {
 				rev = fmt.Sprintf("%d", o.RevisionNum)
 			}
 		}
-		line := row(f.Ref, f.Flags, f.Path, setBy, user, where, rev, when)
+		line := row(f.Ref, blame.Letters(f), f.Path, setBy, user, where, rev, when)
 		if i == b.cursor {
 			cursorLine = len(lines)
 			line = barStyle.Render(line)
@@ -233,6 +238,10 @@ func (m *Model) blameBody(width int) (string, int) {
 // recorded to the field.
 func renderPathReport(r *blame.PathReport) string {
 	var b strings.Builder
+	f := r.Field
+	if f == nil {
+		f = &blame.Field{}
+	}
 	line := func(indent int, label, value string) {
 		if value == "" {
 			return
@@ -247,17 +256,17 @@ func renderPathReport(r *blame.PathReport) string {
 			}
 		}
 	}
-	line(0, "Unit", r.SpaceSlug+"/"+r.UnitSlug)
-	line(0, "Resource", r.ResourceType+" "+r.ResourceName)
-	line(0, "Path", r.Path)
-	line(0, "Ref", r.Ref)
-	line(0, "Flags", r.Flags)
-	line(0, "Value", r.Value)
-	line(0, "Released", r.Released)
-	if r.Protected {
+	line(0, "Unit", f.SpaceSlug+"/"+f.UnitSlug)
+	line(0, "Resource", f.ResourceType+" "+f.ResourceName)
+	line(0, "Path", f.Path)
+	line(0, "Ref", f.Ref)
+	line(0, "Flags", blame.Letters(f))
+	line(0, "Value", f.Value)
+	line(0, "Released", r.ReleaseMessage)
+	if f.Protected {
 		line(0, "Protected", "yes: a local override, which a merge from upstream leaves alone")
 	}
-	line(0, "Guards", blame.FormatGuards(r.Guards))
+	line(0, "Guards", blame.FormatGuards(f.Guards))
 	kinds := make([]string, 0, len(r.Annotations))
 	for kind := range r.Annotations {
 		kinds = append(kinds, kind)
@@ -266,23 +275,27 @@ func renderPathReport(r *blame.PathReport) string {
 	for _, kind := range kinds {
 		line(0, kind, blame.FormatGuards(r.Annotations[kind]))
 	}
-	for _, attribute := range r.Needed {
+	for _, attribute := range f.Needed {
 		line(0, "Needed", blame.FormatNeeded(attribute))
 	}
-	for _, attribute := range r.Provided {
+	for _, attribute := range f.Provided {
 		line(0, "Provided", blame.FormatProvided(attribute))
 	}
-	for _, conflict := range r.Conflicts {
+	for _, conflict := range f.Conflicts {
 		text := conflict.Reason
 		if conflict.Source != nil && conflict.Source.Value != "" {
 			text += fmt.Sprintf("; upstream wrote %q", strings.TrimSpace(conflict.Source.Value))
 		}
+		// The report names the upstream unit a conflict refers to by ID.
+		if upstream := r.Names[conflict.UnitID.String()]; upstream != "" {
+			text += "; from " + upstream
+		}
 		line(0, "Conflict", text)
 	}
-	for _, validation := range r.Validation {
+	for _, validation := range f.Validation {
 		line(0, "Validation", blame.FormatValidation(validation))
 	}
-	for _, finding := range r.Findings {
+	for _, finding := range f.Findings {
 		line(0, "Finding", strings.TrimSpace(finding.Reason+" "+finding.Details))
 	}
 
@@ -294,6 +307,9 @@ func renderPathReport(r *blame.PathReport) string {
 	}
 	for _, change := range r.Changes {
 		o := change.Origin
+		if o == nil {
+			continue
+		}
 		fmt.Fprintf(&b, "\n  %s/%s revision %d, mutation %d\n", o.SpaceSlug, o.UnitSlug, o.RevisionNum, o.MutationNum)
 		line(4, "Set by", o.SetBy)
 		if o.Function != "" && o.Function != o.SetBy {
@@ -317,6 +333,9 @@ func renderPathReport(r *blame.PathReport) string {
 		b.WriteString("\nHistory of the field in this unit, oldest first:\n\n")
 		for _, change := range r.History {
 			o := change.Origin
+			if o == nil {
+				continue
+			}
 			fmt.Fprintf(&b, "  rev %-5d %-7s %-32s %-28s %-24s %s\n", o.RevisionNum, change.MutationType,
 				cut(strings.ReplaceAll(change.Value, "\n", " "), 32), cut(o.SetBy, 28), cut(o.User, 24), ago(o.When))
 		}

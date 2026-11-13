@@ -439,7 +439,8 @@ own fields.
 `↑`/`↓` choose a field. `Enter` shows everything recorded about it, as `cub unit path` does:
 its value, whether it is released, protection, guards, conflicts, findings and failed checks
 with what each said, the attributes it is needed or provided as, with the link that bound a
-needed one, and each change
+needed one, the comments written above, beside and below it in the configuration, the latest
+thread of review comments about it, and each change
 from this unit out to where the value was set, with the link, function, operation, user,
 change orders, releases and tags of each. `h` does the same and adds every change the unit
 recorded to the field, oldest first, which reads the record of every revision of the unit.

@@ -7,7 +7,9 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	goclientnew "github.com/confighub/sdk/core/openapi/goclient-new"
 	"github.com/confighub/sdk/cubutil/blame"
+	"github.com/google/uuid"
 
 	"github.com/confighub/cub-commander/internal/cubclient"
 )
@@ -23,6 +25,7 @@ func (s *stubBlame) loader() BlameLoader {
 	return func(ctx context.Context, row cubclient.Row) (*BlameResult, error) {
 		s.loads++
 		when := time.Now().Add(-2 * time.Hour)
+		changeOrderID, reviewerID := uuid.New(), uuid.New()
 		upstream := &blame.Origin{SpaceSlug: "registry-facts", UnitSlug: "ui-image", RevisionNum: 81, SetBy: "UpdateUnit", User: "registrybot", When: when}
 		here := &blame.Origin{SpaceSlug: "prod", UnitSlug: "web", RevisionNum: 31, SetBy: "link ui-stable-image",
 			Function: "set-image-reference-by-uri", LinkUpstream: "registry-facts/ui-image", LinkUpstreamRevisionNum: 81, When: when}
@@ -40,6 +43,15 @@ func (s *stubBlame) loader() BlameLoader {
 				s.path, s.history = f.Path, history
 				report := &blame.PathReport{Field: f, ReleaseState: "Released",
 					ReleaseMessage: "yes: the unit's last release is of revision 31"}
+				if f.Path == "spec.replicas" {
+					report.ConfigComments = &goclientnew.BlameConfigComments{Head: "Three, for the rollout.", Line: "was 2"}
+					report.ReviewThreads = 2
+					report.ReviewThread = &goclientnew.BlameReviewThread{ChangeOrderID: changeOrderID, Comments: []goclientnew.ReviewComment{
+						{UserID: reviewerID, RevisionNum: 4, CreatedAt: when, Text: "Why three?"},
+						{UserID: reviewerID, RevisionNum: 4, CreatedAt: when, Text: "For the rollout."},
+					}}
+					report.Names = map[string]string{changeOrderID.String(): "raise-replicas", reviewerID.String(): "alice"}
+				}
 				for i := range f.Chain {
 					report.Changes = append(report.Changes, blame.PathChange{Origin: &f.Chain[i]})
 				}
@@ -198,5 +210,21 @@ func TestBlameRecordShowsFailedChecks(t *testing.T) {
 	m = update(m, keyMsg("enter"))
 	if v := m.View().Content; !strings.Contains(v, "Validation:") || !strings.Contains(v, "warning prod/replicas/vet-cel: replicas must be more than 3") {
 		t.Fatalf("the record lacks the failed check:\n%s", v)
+	}
+}
+
+// A field's record has the comments its configuration has about it, and the latest thread of
+// review comments about it, with the authors and the ChangeOrder named.
+func TestBlameRecordShowsCommentsAndReviewThread(t *testing.T) {
+	stub := &stubBlame{}
+	m := blameModel(t, stub, unitRow())
+	m = update(m, keyMsg("3"))
+	m = update(m, keyMsg("enter"))
+	v := m.View().Content
+	for _, want := range []string{"Comment above: Three, for the rollout.", "Line comment:  was 2",
+		"Latest of 2 review threads, in the review of ChangeOrder raise-replicas:", "alice, revision 4", "Why three?", "For the rollout."} {
+		if !strings.Contains(v, want) {
+			t.Errorf("the record lacks %q:\n%s", want, v)
+		}
 	}
 }

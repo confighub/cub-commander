@@ -298,6 +298,32 @@ func renderPathReport(r *blame.PathReport) string {
 	for _, finding := range f.Findings {
 		line(0, "Finding", strings.TrimSpace(finding.Reason+" "+finding.Details))
 	}
+	if c := r.ConfigComments; c != nil {
+		line(0, "Comment above", c.Head)
+		line(0, "Line comment", c.Line)
+		line(0, "Comment below", c.Foot)
+	}
+	if thread := r.ReviewThread; thread != nil && len(thread.Comments) > 0 {
+		heading := "Review thread"
+		if r.ReviewThreads > 1 {
+			heading = fmt.Sprintf("Latest of %d review threads", r.ReviewThreads)
+		}
+		if name := r.Names[thread.ChangeOrderID.String()]; name != "" {
+			heading += ", in the review of ChangeOrder " + name
+		}
+		b.WriteString("\n" + heading + ":\n")
+		for _, comment := range thread.Comments {
+			// The report leaves out authors it cannot read.
+			author := r.Names[comment.UserID.String()]
+			if author == "" {
+				author = "unknown user"
+			}
+			fmt.Fprintf(&b, "\n  %s, revision %d, %s\n", author, comment.RevisionNum, ago(comment.CreatedAt))
+			for _, text := range strings.Split(strings.TrimRight(comment.Text, "\n"), "\n") {
+				b.WriteString("    " + text + "\n")
+			}
+		}
+	}
 
 	b.WriteString("\n")
 	if len(r.Changes) == 0 {

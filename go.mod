@@ -6,8 +6,8 @@ require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/confighub/sdk/core v0.11.1
-	github.com/confighub/sdk/cubutil v0.11.1
+	github.com/confighub/sdk/core v0.11.9
+	github.com/confighub/sdk/cubutil v0.11.9
 	github.com/google/uuid v1.6.0
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3
 	github.com/spf13/cobra v1.10.2

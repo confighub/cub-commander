@@ -49,7 +49,7 @@ ResourceType}`. The where grammar (`confighub/internal/views/filter_parser.go`) 
   separate `where_data` parameter.
 - Joinable prefixes per entity come from the `Extended<Entity>` schemas (SDK core v0.8.7).
   Unit: Organization, Space, Target, ChangeSet, UpstreamUnit, UpstreamSpace, FromLink*,
-  HeadRevision, LastReleasedRevision, HeadMutation, UnitEvent. Space: Component,
+  HeadRevision, LastReleasedRevision, HeadMutation. Space: Component,
   UpstreamSpace, Triggers*, Attributes*, ReleaseTarget. Revision: Unit, User, ChangeSet,
   Tags*, ChangeOrders*, Releases*, Attestations*. ChangeOrder: StartTag, EndTag, RestoreTag,
   Invocation, SpaceFilter, UnitFilter. Link: FromUnit, ToUnit, ToSpace. (`*` = list-valued.)
@@ -568,7 +568,7 @@ catalog probe test that runs against a real hub and fails when the join table dr
 In: the TUI (command area, history, results, detail, browse in columns and tree form,
 chips, pivots, catalog, save-as-view); SELECT and BROWSE over every entity with `--where` in
 the CLI (unit, space, target, link, revision, mutation, changeset, tag, trigger, invocation,
-filter, view, unit-event, unit-action, user); saved Views and Filters as sources and
+filter, view, user); saved Views and Filters as sources and
 as save targets; function columns for get and vet functions; HAVING and local aggregates;
 SHOW/DESCRIBE/EXPLAIN; DIFF in all five forms.
 

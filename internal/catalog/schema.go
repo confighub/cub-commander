@@ -162,8 +162,6 @@ func JoinEntity(prefix string) string {
 		return "Filter"
 	case "UpstreamTarget":
 		return "Target"
-	case "UnitEvent", "LatestUnitEvent":
-		return "UnitEvent"
 	case "Triggers":
 		return "Trigger"
 	case "Attributes":

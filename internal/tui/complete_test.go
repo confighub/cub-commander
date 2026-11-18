@@ -37,7 +37,7 @@ func TestComplete(t *testing.T) {
 		{"", []string{"SELECT", "Unit", "Space"}, nil},
 		{"SEL", []string{"SELECT"}, []string{"Unit"}},
 		{"SELECT * FROM ", []string{"Unit", "Space", "Revision"}, nil},
-		{"SELECT * FROM Un", []string{"Unit", "UnitEvent"}, []string{"Space"}},
+		{"SELECT * FROM Un", []string{"Unit"}, []string{"Space"}},
 		{"SELECT * FROM Unit ", []string{"IN", "WHERE", "HAVING", "ORDER BY", "LIMIT"}, nil},
 		{"SELECT * FROM Unit IN * ", []string{"WHERE", "LIMIT"}, []string{"IN"}},
 		{"SELECT * FROM Unit IN ", []string{"*"}, nil},

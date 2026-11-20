@@ -17,7 +17,7 @@ func stubSpaces(t *testing.T) Runner {
 	mk := func(slug, comp, variant string) cubclient.Row {
 		return cubclient.Row{"Space": map[string]any{"Slug": slug, "SpaceID": "s-" + slug, "Labels": map[string]any{"Component": comp, "Variant": variant}}}
 	}
-	rows := []cubclient.Row{mk("argobot-base", "argobot", "base"), mk("argobot-nonprod", "argobot", "nonprod"), mk("argobot-prod", "argobot", "prod"), mk("docs-prod", "docs", "prod")}
+	rows := []cubclient.Row{mk("auth-base", "auth", "base"), mk("auth-nonprod", "auth", "nonprod"), mk("auth-prod", "auth", "prod"), mk("docs-prod", "docs", "prod")}
 	return func(ctx context.Context, st lang.Stmt, sess plan.Session) (tea.Msg, error) {
 		sel := st.(*lang.SelectStmt)
 		p, err := plan.Compile(sel, sess)
@@ -46,7 +46,7 @@ func TestMarkTwoVariantsThenDiff(t *testing.T) {
 	if mm.mode != modeBrowse {
 		t.Fatalf("mode %v %q", mm.mode, mm.status)
 	}
-	// Component pane: argobot is first. Move into Variant: base, nonprod, prod.
+	// Component pane: auth is first. Move into Variant: base, nonprod, prod.
 	m = press(m, "right", "down") // nonprod
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'm', Text: "m"})
 	m = press(m, "down") // prod
@@ -57,7 +57,7 @@ func TestMarkTwoVariantsThenDiff(t *testing.T) {
 	}
 	m, _ = mm.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	mm = m.(Model)
-	want := "Space | in *\n| where Labels.Component = 'argobot'\n| diff Labels.Variant = 'nonprod' vs Labels.Variant = 'prod'"
+	want := "Space | in *\n| where Labels.Component = 'auth'\n| diff Labels.Variant = 'nonprod' vs Labels.Variant = 'prod'"
 	if mm.cmd.Value() != want {
 		t.Fatalf("diff statement:\n%q\nstatus %q", mm.cmd.Value(), mm.status)
 	}

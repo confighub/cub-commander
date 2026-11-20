@@ -70,7 +70,7 @@ type changeMsg struct {
 }
 
 // changeOrderRefreshEvery is the auto-refresh period in change order mode: gates are
-// read live and the thing people wait for (a release, argobot's report)
+// read live and the thing people wait for (a release, k8sbot's report)
 // happens elsewhere, so the screen must not sit on a stale reading.
 var changeOrderRefreshEvery = 10 * time.Second
 

@@ -206,7 +206,7 @@ func (o Order) Ref() string {
 }
 
 // Health is the LiveStatus of a space's latest published Release, as the
-// reporter (argobot) wrote it there.
+// reporter (k8sbot) wrote it there.
 type Health struct {
 	Present    bool
 	Sync       string // Synced, OutOfSync, Unknown
